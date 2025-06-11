@@ -1,18 +1,29 @@
-import {
-  ArrayType,
-  BaseType,
-  FunctionType,
-  GenericType,
-  IntersectionType,
-  ObjectType,
-  PrimitiveType,
-  UnionType,
-} from "./types";
+const TAB = "  ";
+
 abstract class BaseExpr {
   abstract toString(): string;
 
   *[Symbol.iterator]() {
     yield this;
+  }
+}
+
+class BlockExpr extends BaseExpr {
+  constructor(public block: () => Generator<Expr>) {
+    super();
+  }
+
+  toString(indent = "") {
+    let result = "{\n";
+    for (const e of this.block()) {
+      if (e instanceof IfExpr) {
+        result += indent + TAB + e.toString(indent + TAB) + "\n";
+      } else {
+        result += indent + TAB + e.toString() + "\n";
+      }
+    }
+
+    return result + indent + "}";
   }
 }
 
@@ -69,21 +80,25 @@ class LetExpr extends BaseExpr {
 
   toString(): string {
     const typeAnnotation = this.type ? `: ${this.type.toString()}` : "";
-    return `let ${this.name}${typeAnnotation} = ${this.value.toString()};\n`;
+    return `let ${this.name}${typeAnnotation} = ${this.value.toString()};`;
   }
 }
 
 class IfExpr extends BaseExpr {
   constructor(
     public condition: Expr,
-    public thenBranch: Expr,
-    public elseBranch: Expr,
+    public thenBranch: BlockExpr,
+    public elseBranch: BlockExpr,
   ) {
     super();
   }
 
-  toString(): string {
-    return `if (${this.condition.toString()}) { ${this.thenBranch.toString()} } else { ${this.elseBranch.toString()} }`;
+  toString(indent = ""): string {
+    let result = "if (" + this.condition.toString() + ") ";
+    result += this.thenBranch.toString(indent);
+    result += " else ";
+    result += this.elseBranch.toString(indent);
+    return result;
   }
 }
 
@@ -187,6 +202,129 @@ class InterfaceExpr extends BaseExpr {
   }
 }
 
+export abstract class BaseType {
+  abstract toString(): string;
+}
+
+export class PrimitiveType extends BaseType {
+  constructor(public name: string) {
+    super();
+  }
+
+  toString(): string {
+    return this.name;
+  }
+}
+
+export class GenericType extends BaseType {
+  constructor(
+    public name: string,
+    public args: BaseType[],
+  ) {
+    super();
+  }
+
+  toString(): string {
+    if (this.args.length === 0) return this.name;
+    const args = this.args.map((arg) => arg.toString()).join(", ");
+    return `${this.name}<${args}>`;
+  }
+}
+
+export class ObjectType extends BaseType {
+  constructor(
+    public properties: Record<
+      string,
+      | BaseType
+      | number
+      | string
+      | symbol
+      | boolean
+      | undefined
+      | void
+      | Record<any, any>
+    >,
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const properties = Object.entries(this.properties)
+      .map(([key, type]) => {
+        if (type instanceof BaseType) return `${key}: ${type.toString()}`;
+        return `${key}: ${JSON.stringify(type)}`;
+      })
+      .join("; ");
+    return `{ ${properties} }`;
+  }
+}
+
+export class ArrayType extends BaseType {
+  constructor(public elementType: BaseType) {
+    super();
+  }
+
+  toString(): string {
+    return `${this.elementType.toString()}[]`;
+  }
+}
+
+export class FunctionType extends BaseType {
+  constructor(
+    public params: BaseType[],
+    public returnType: BaseType,
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const params = this.params.map((p) => p.toString()).join(", ");
+    return `(${params}) => ${this.returnType.toString()}`;
+  }
+}
+
+export class UnionType extends BaseType {
+  constructor(public types: BaseType[]) {
+    super();
+  }
+
+  toString(): string {
+    return this.types.map((t) => t.toString()).join(" | ");
+  }
+}
+
+export class IntersectionType extends BaseType {
+  constructor(public types: BaseType[]) {
+    super();
+  }
+
+  toString(): string {
+    return this.types.map((t) => t.toString()).join(" & ");
+  }
+}
+
+// export const primitive = (name: string) => new PrimitiveType(name);
+// export const generic = (name: string, args: BaseType[] = []) =>
+//   new GenericType(name, args);
+// export const obj = (properties: Record<string, BaseType>) =>
+//   new ObjectType(properties);
+// export const array = (elementType: BaseType) => new ArrayType(elementType);
+// export const fn = (params: BaseType[], returnType: BaseType) =>
+//   new FunctionType(params, returnType);
+// export const union = (...types: BaseType[]) => new UnionType(types);
+// export const intersection = (...types: BaseType[]) =>
+//
+
+class RawExpr extends BaseExpr {
+  constructor(public code: string) {
+    super();
+  }
+
+  toString(): string {
+    return this.code;
+  }
+}
+
 type Expr =
   | NumberExpr
   | StringExpr
@@ -197,7 +335,8 @@ type Expr =
   | ArrayExpr
   | FunctionExpr
   | TypeAliasExpr
-  | InterfaceExpr;
+  | InterfaceExpr
+  | RawExpr;
 
 class CodeWriter<const Y, const R> {
   constructor(public write: () => Generator<Y, R, void>) {}
@@ -211,7 +350,7 @@ class CodeWriter<const Y, const R> {
   }
 }
 
-const $ = {
+const val = {
   number: (value: number, type?: BaseType) => new NumberExpr(value, type),
   string: (value: string, type?: BaseType) => new StringExpr(value, type),
   bool: (value: boolean, type?: BaseType) => new BoolExpr(value, type),
@@ -219,7 +358,7 @@ const $ = {
   let: (name: string, value: Expr, type?: BaseType) =>
     new LetExpr(name, value, type),
 
-  if: (condition: Expr, thenBranch: Expr, elseBranch: Expr) =>
+  if: (condition: Expr, thenBranch: BlockExpr, elseBranch: BlockExpr) =>
     new IfExpr(condition, thenBranch, elseBranch),
 
   object: (properties: Record<string, Expr>, type?: BaseType) =>
@@ -234,11 +373,13 @@ const $ = {
     typeParams?: string[],
   ) => new FunctionExpr(params, body, returnType, typeParams),
 
-  raw: (value: string) => value,
+  raw: (value: string) => new RawExpr(value),
   nl: () => "\n",
+
+  block: (fn: () => Generator<Expr>) => new BlockExpr(fn),
 };
 
-export const $$ = {
+export const type = {
   primitive: (name: string) => new PrimitiveType(name),
   generic: (name: string, args: BaseType[] = []) => new GenericType(name, args),
   object: (properties: Record<string, BaseType>) => new ObjectType(properties),
@@ -259,58 +400,77 @@ export const $$ = {
 };
 
 const cw = new CodeWriter(function* () {
-  yield* $$.typeAlias(
+  yield* type.typeAlias(
     "Point",
-    $$.object({
-      x: $$.primitive("T"),
-      y: $$.primitive("T"),
+    type.object({
+      x: type.primitive("T"),
+      y: type.primitive("T"),
     }),
     ["T"],
   );
-  yield $.raw("hi");
-  yield* $.nl();
+  yield val.raw("hi");
+  yield* val.nl();
 
-  yield* $$.interface(
+  yield* type.interface(
     "Repository",
     {
-      findById: $$.function(
-        [$$.primitive("string")],
-        $$.generic("Promise", [$$.generic("T")]),
+      findById: type.function(
+        [type.primitive("string")],
+        type.generic("Promise", [type.generic("T")]),
       ),
-      save: $$.function(
-        [$$.primitive("T")],
-        $$.generic("Promise", [$$.primitive("void")]),
+      save: type.function(
+        [type.primitive("T")],
+        type.generic("Promise", [type.primitive("void")]),
       ),
     },
     ["T"],
   );
 
-  yield* $.let(
+  yield* val.let(
     "point",
-    $.object({
-      x: $.number(10),
-      y: $.number(20),
+    val.object({
+      x: val.number(10),
+      y: val.number(20),
     }),
-    $$.generic("Point", [$$.primitive("number")]),
+    type.generic("Point", [type.primitive("number")]),
   );
 
-  yield* $.let(
+  yield* val.let(
     "lol",
-    $.fn(
+    val.fn(
       [
-        { name: "items", type: $$.array($$.primitive("T")) },
+        { name: "items", type: type.array(type.primitive("T")) },
         {
           name: "predicate",
-          type: $$.function([$$.primitive("T")], $$.primitive("boolean")),
+          type: type.function([type.primitive("T")], type.primitive("boolean")),
         },
       ],
-      $.array([]),
-      $$.array($$.primitive("T")),
+      val.array([]),
+      type.array(type.primitive("T")),
       ["T"],
     ),
   );
 
-  yield* $.number(2);
+  yield* val.number(2);
+});
+
+const cw2 = new CodeWriter(function* () {
+  yield* val.block(function* () {
+    yield* val.let("x", val.bool(true));
+    yield* val.let("y", val.bool(false));
+
+    yield* val.if(
+      val.bool(true),
+      val.block(function* () {
+        yield* val.raw("console.log('Hello World!')");
+      }),
+      val.block(function* () {
+        yield* val.raw("console.log('Hello World!')");
+      }),
+    );
+  });
 });
 
 console.log(cw.run());
+console.log("\n\n\n");
+console.log(cw2.run());
