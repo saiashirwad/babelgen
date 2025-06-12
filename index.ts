@@ -1,3 +1,22 @@
+export const isObject = (value: unknown) =>
+  typeof value === "object" && value !== null;
+
+export const isPrimitive = (value: unknown) =>
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean" ||
+  value === null ||
+  value === undefined;
+
+export const isArray = (value: unknown) => Array.isArray(value);
+export const isFunction = (value: unknown) => typeof value === "function";
+export const isNull = (value: unknown) => value === null;
+export const isUndefined = (value: unknown) => value === undefined;
+export const isString = (value: unknown) => typeof value === "string";
+export const isNumber = (value: unknown) => typeof value === "number";
+export const isBoolean = (value: unknown) => typeof value === "boolean";
+export const isSymbol = (value: unknown) => typeof value === "symbol";
+
 const TAB = "  ";
 
 abstract class BaseExpr {
@@ -30,7 +49,7 @@ class BlockExpr extends BaseExpr {
 class NumberExpr extends BaseExpr {
   constructor(
     public value: number,
-    public type?: BaseType,
+    public type?: BaseType
   ) {
     super();
   }
@@ -44,7 +63,7 @@ class NumberExpr extends BaseExpr {
 class StringExpr extends BaseExpr {
   constructor(
     public value: string,
-    public type?: BaseType,
+    public type?: BaseType
   ) {
     super();
   }
@@ -58,7 +77,7 @@ class StringExpr extends BaseExpr {
 class BoolExpr extends BaseExpr {
   constructor(
     public value: boolean,
-    public type?: BaseType,
+    public type?: BaseType
   ) {
     super();
   }
@@ -72,15 +91,19 @@ class BoolExpr extends BaseExpr {
 class LetExpr extends BaseExpr {
   constructor(
     public name: string,
-    public value: Expr,
-    public type?: BaseType,
+    public value: ValueExpr,
+    public type?: BaseType
   ) {
     super();
   }
 
   toString(): string {
     const typeAnnotation = this.type ? `: ${this.type.toString()}` : "";
-    return `let ${this.name}${typeAnnotation} = ${this.value.toString()};`;
+    const valueStr =
+      this.value instanceof BaseExpr
+        ? this.value.toString()
+        : JSON.stringify(this.value);
+    return `let ${this.name}${typeAnnotation} = ${valueStr};`;
   }
 }
 
@@ -88,7 +111,7 @@ class IfExpr extends BaseExpr {
   constructor(
     public condition: Expr,
     public thenBranch: BlockExpr,
-    public elseBranch: BlockExpr,
+    public elseBranch: BlockExpr
   ) {
     super();
   }
@@ -104,15 +127,19 @@ class IfExpr extends BaseExpr {
 
 class ObjectExpr extends BaseExpr {
   constructor(
-    public properties: Record<string, Expr>,
-    public type?: BaseType,
+    public properties: Record<string, ValueExpr>,
+    public type?: BaseType
   ) {
     super();
   }
 
   toString(): string {
     const properties = Object.entries(this.properties)
-      .map(([key, value]) => `${key}: ${value.toString()}`)
+      .map(([key, value]) => {
+        const valueStr =
+          value instanceof BaseExpr ? value.toString() : JSON.stringify(value);
+        return `${key}: ${valueStr}`;
+      })
       .join(", ");
     const typeAnnotation = this.type ? `: ${this.type.toString()}` : "";
     return `{ ${properties} }${typeAnnotation}`;
@@ -122,7 +149,7 @@ class ObjectExpr extends BaseExpr {
 class ArrayExpr extends BaseExpr {
   constructor(
     public elements: Expr[],
-    public type?: BaseType,
+    public type?: BaseType
   ) {
     super();
   }
@@ -141,7 +168,7 @@ class FunctionExpr extends BaseExpr {
     public params: Array<{ name: string; type?: BaseType }>,
     public body: Expr,
     public returnType?: BaseType,
-    public typeParams?: string[],
+    public typeParams?: string[]
   ) {
     super();
   }
@@ -167,7 +194,7 @@ class TypeAliasExpr extends BaseExpr {
   constructor(
     public name: string,
     public type: BaseType,
-    public typeParams?: string[],
+    public typeParams?: string[]
   ) {
     super();
   }
@@ -184,7 +211,7 @@ class InterfaceExpr extends BaseExpr {
   constructor(
     public name: string,
     public properties: Record<string, BaseType>,
-    public typeParams?: string[],
+    public typeParams?: string[]
   ) {
     super();
   }
@@ -219,7 +246,7 @@ export class PrimitiveType extends BaseType {
 export class GenericType extends BaseType {
   constructor(
     public name: string,
-    public args: BaseType[],
+    public args: BaseType[]
   ) {
     super();
   }
@@ -232,19 +259,7 @@ export class GenericType extends BaseType {
 }
 
 export class ObjectType extends BaseType {
-  constructor(
-    public properties: Record<
-      string,
-      | BaseType
-      | number
-      | string
-      | symbol
-      | boolean
-      | undefined
-      | void
-      | Record<any, any>
-    >,
-  ) {
+  constructor(public properties: Record<string, ValueExpr>) {
     super();
   }
 
@@ -272,7 +287,7 @@ export class ArrayType extends BaseType {
 export class FunctionType extends BaseType {
   constructor(
     public params: BaseType[],
-    public returnType: BaseType,
+    public returnType: BaseType
   ) {
     super();
   }
@@ -303,18 +318,6 @@ export class IntersectionType extends BaseType {
   }
 }
 
-// export const primitive = (name: string) => new PrimitiveType(name);
-// export const generic = (name: string, args: BaseType[] = []) =>
-//   new GenericType(name, args);
-// export const obj = (properties: Record<string, BaseType>) =>
-//   new ObjectType(properties);
-// export const array = (elementType: BaseType) => new ArrayType(elementType);
-// export const fn = (params: BaseType[], returnType: BaseType) =>
-//   new FunctionType(params, returnType);
-// export const union = (...types: BaseType[]) => new UnionType(types);
-// export const intersection = (...types: BaseType[]) =>
-//
-
 class RawExpr extends BaseExpr {
   constructor(public code: string) {
     super();
@@ -336,32 +339,63 @@ type Expr =
   | FunctionExpr
   | TypeAliasExpr
   | InterfaceExpr
-  | RawExpr;
+  | RawExpr
+  | BlockExpr;
 
-class CodeWriter<const Y, const R> {
-  constructor(public write: () => Generator<Y, R, void>) {}
+type Primitive = number | string | boolean | symbol | Record<string, any>;
+type ValueExpr = Expr | Primitive;
 
-  run() {
-    let result = "";
-    for (const value of this.write()) {
-      result += value;
-    }
-    return result;
+function printValue(val: ValueExpr) {
+  if (val instanceof BaseExpr) {
+    return val.toString();
   }
+  if (isObject(val)) {
+    console.log(val);
+  }
+}
+
+// class CodeWriter<const Y> {
+//   constructor(public write: () => Generator<Y, void>) {}
+
+//   run() {
+//     let result = "";
+//     for (const value of this.write()) {
+//       result += value;
+//     }
+//     return result;
+//   }
+// }
+
+type CodeWriter = {
+  run: () => string;
+};
+
+function CodeWriter<const Y>(write: () => Generator<Y, void>): CodeWriter {
+  return {
+    run: () => {
+      let result = "";
+      for (const value of write()) {
+        result += value;
+      }
+      return result;
+    },
+  };
 }
 
 const val = {
   number: (value: number, type?: BaseType) => new NumberExpr(value, type),
+
   string: (value: string, type?: BaseType) => new StringExpr(value, type),
+
   bool: (value: boolean, type?: BaseType) => new BoolExpr(value, type),
 
-  let: (name: string, value: Expr, type?: BaseType) =>
+  let: (name: string, value: ValueExpr, type?: BaseType) =>
     new LetExpr(name, value, type),
 
   if: (condition: Expr, thenBranch: BlockExpr, elseBranch: BlockExpr) =>
     new IfExpr(condition, thenBranch, elseBranch),
 
-  object: (properties: Record<string, Expr>, type?: BaseType) =>
+  object: (properties: Record<string, ValueExpr>, type?: BaseType) =>
     new ObjectExpr(properties, type),
 
   array: (elements: Expr[], type?: BaseType) => new ArrayExpr(elements, type),
@@ -370,23 +404,30 @@ const val = {
     params: Array<{ name: string; type?: BaseType }>,
     body: Expr,
     returnType?: BaseType,
-    typeParams?: string[],
+    typeParams?: string[]
   ) => new FunctionExpr(params, body, returnType, typeParams),
 
   raw: (value: string) => new RawExpr(value),
-  nl: () => "\n",
+
+  nl: () => new RawExpr("\n"),
 
   block: (fn: () => Generator<Expr>) => new BlockExpr(fn),
 };
 
 export const type = {
   primitive: (name: string) => new PrimitiveType(name),
+
   generic: (name: string, args: BaseType[] = []) => new GenericType(name, args),
+
   object: (properties: Record<string, BaseType>) => new ObjectType(properties),
+
   array: (elementType: BaseType) => new ArrayType(elementType),
+
   function: (params: BaseType[], returnType: BaseType) =>
     new FunctionType(params, returnType),
+
   union: (...types: BaseType[]) => new UnionType(types),
+
   intersection: (...types: BaseType[]) => new IntersectionType(types),
 
   typeAlias: (name: string, type: BaseType, typeParams?: string[]) =>
@@ -395,69 +436,82 @@ export const type = {
   interface: (
     name: string,
     properties: Record<string, BaseType>,
-    typeParams?: string[],
+    typeParams?: string[]
   ) => new InterfaceExpr(name, properties, typeParams),
 };
 
-const cw = new CodeWriter(function* () {
-  yield* type.typeAlias(
-    "Point",
-    type.object({
-      x: type.primitive("T"),
-      y: type.primitive("T"),
-    }),
-    ["T"],
-  );
-  yield val.raw("hi");
-  yield* val.nl();
+const cw = CodeWriter(function* () {
+  yield* val.block(function* () {
+    yield* type.typeAlias(
+      "Point",
+      type.object({
+        x: type.primitive("T"),
+        y: type.primitive("T"),
+      }),
+      ["T"]
+    );
+    yield* val.nl();
 
-  yield* type.interface(
-    "Repository",
-    {
-      findById: type.function(
-        [type.primitive("string")],
-        type.generic("Promise", [type.generic("T")]),
-      ),
-      save: type.function(
-        [type.primitive("T")],
-        type.generic("Promise", [type.primitive("void")]),
-      ),
-    },
-    ["T"],
-  );
+    yield* type.interface(
+      "Repository",
+      {
+        findById: type.function(
+          [type.primitive("string")],
+          type.generic("Promise", [type.generic("T")])
+        ),
+        save: type.function(
+          [type.primitive("T")],
+          type.generic("Promise", [type.primitive("void")])
+        ),
+      },
+      ["T"]
+    );
 
-  yield* val.let(
-    "point",
-    val.object({
-      x: val.number(10),
-      y: val.number(20),
-    }),
-    type.generic("Point", [type.primitive("number")]),
-  );
+    yield* val.let(
+      "point",
+      val.object({
+        x: val.number(10),
+        y: val.number(20),
+      }),
+      type.generic("Point", [type.primitive("number")])
+    );
 
-  yield* val.let(
-    "lol",
-    val.fn(
-      [
-        { name: "items", type: type.array(type.primitive("T")) },
-        {
-          name: "predicate",
-          type: type.function([type.primitive("T")], type.primitive("boolean")),
-        },
-      ],
-      val.array([]),
-      type.array(type.primitive("T")),
-      ["T"],
-    ),
-  );
+    yield* val.let(
+      "lol",
+      val.fn(
+        [
+          { name: "items", type: type.array(type.primitive("T")) },
+          {
+            name: "predicate",
+            type: type.function(
+              [type.primitive("T")],
+              type.primitive("boolean")
+            ),
+          },
+        ],
+        val.array([]),
+        type.array(type.primitive("T")),
+        ["T"]
+      )
+    );
 
-  yield* val.number(2);
+    yield* val.number(2);
+  });
 });
 
-const cw2 = new CodeWriter(function* () {
+const cw2 = CodeWriter(function* () {
   yield* val.block(function* () {
-    yield* val.let("x", val.bool(true));
-    yield* val.let("y", val.bool(false));
+    yield* val.let("x", true);
+    yield* val.let("y", false);
+    yield* val.let(
+      "user",
+      val.object({
+        name: "sai",
+        age: 2,
+        isPerson: val.bool(true),
+        isReal: true,
+      })
+    );
 
     yield* val.if(
       val.bool(true),
@@ -466,11 +520,11 @@ const cw2 = new CodeWriter(function* () {
       }),
       val.block(function* () {
         yield* val.raw("console.log('Hello World!')");
-      }),
+      })
     );
   });
 });
 
 console.log(cw.run());
-console.log("\n\n\n");
+// console.log("\n\n\n");
 console.log(cw2.run());
