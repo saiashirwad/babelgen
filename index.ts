@@ -35,7 +35,7 @@ class BlockExpr extends BaseExpr {
   toString(indent = "") {
     let result = "{\n";
     for (const e of this.block()) {
-      if (e instanceof IfExpr) {
+      if (e instanceof IfExpr || e instanceof ForExpr || e instanceof WhileExpr) {
         result += indent + TAB + e.toString(indent + TAB) + "\n";
       } else if (e instanceof BaseExpr) {
         result += indent + TAB + e.toString() + "\n";
@@ -131,6 +131,100 @@ class IfExpr extends BaseExpr {
   }
 }
 
+class ForExpr extends BaseExpr {
+  constructor(
+    public init: ValueExpr | undefined,
+    public variable: string,
+    public iterable: ValueExpr,
+    public body: () => Generator<ValueExpr>,
+    public type: "for-of" | "for-in" | "for" = "for-of"
+  ) {
+    super();
+  }
+
+  toString(indent = ""): string {
+    let result = "";
+
+    if (this.type === "for-of") {
+      const iterableStr =
+        this.iterable instanceof BaseExpr
+          ? this.iterable.toString()
+          : JSON.stringify(this.iterable);
+      result = `for (const ${this.variable} of ${iterableStr}) `;
+    } else if (this.type === "for-in") {
+      const iterableStr =
+        this.iterable instanceof BaseExpr
+          ? this.iterable.toString()
+          : JSON.stringify(this.iterable);
+      result = `for (const ${this.variable} in ${iterableStr}) `;
+    } else {
+      // Traditional for loop
+      const initStr =
+        this.init instanceof BaseExpr
+          ? this.init.toString()
+          : JSON.stringify(this.init);
+      const conditionStr = this.variable; // reuse for condition
+      const incrementStr =
+        this.iterable instanceof BaseExpr
+          ? this.iterable.toString()
+          : JSON.stringify(this.iterable);
+      result = `for (${initStr}; ${conditionStr}; ${incrementStr}) `;
+    }
+
+    result += "{\n";
+    for (const expr of this.body()) {
+      if (
+        expr instanceof IfExpr ||
+        expr instanceof ForExpr ||
+        expr instanceof WhileExpr
+      ) {
+        result += indent + TAB + expr.toString(indent + TAB) + "\n";
+      } else if (expr instanceof BaseExpr) {
+        result += indent + TAB + expr.toString() + "\n";
+      } else {
+        result += indent + TAB + JSON.stringify(expr) + "\n";
+      }
+    }
+    result += indent + "}";
+
+    return result;
+  }
+}
+
+class WhileExpr extends BaseExpr {
+  constructor(
+    public condition: ValueExpr,
+    public body: () => Generator<ValueExpr>
+  ) {
+    super();
+  }
+
+  toString(indent = ""): string {
+    const conditionStr =
+      this.condition instanceof BaseExpr
+        ? this.condition.toString()
+        : JSON.stringify(this.condition);
+
+    let result = `while (${conditionStr}) {\n`;
+    for (const expr of this.body()) {
+      if (
+        expr instanceof IfExpr ||
+        expr instanceof ForExpr ||
+        expr instanceof WhileExpr
+      ) {
+        result += indent + TAB + expr.toString(indent + TAB) + "\n";
+      } else if (expr instanceof BaseExpr) {
+        result += indent + TAB + expr.toString() + "\n";
+      } else {
+        result += indent + TAB + JSON.stringify(expr) + "\n";
+      }
+    }
+    result += indent + "}";
+
+    return result;
+  }
+}
+
 class ObjectExpr extends BaseExpr {
   constructor(
     public properties: Record<string, ValueExpr>,
@@ -178,7 +272,7 @@ class ArrayExpr extends BaseExpr {
 class FunctionExpr extends BaseExpr {
   constructor(
     public params: Array<{ name: string; type?: BaseType }>,
-    public body: Expr,
+    public body: () => Generator<ValueExpr, ValueExpr>,
     public returnType?: BaseType,
     public typeParams?: string[]
   ) {
@@ -198,7 +292,35 @@ class FunctionExpr extends BaseExpr {
       ? `: ${this.returnType.toString()}`
       : "";
 
-    return `${typeParamsStr}(${params})${returnTypeStr} => ${this.body.toString()}`;
+    let bodyStr = "{\n";
+    const generator = this.body();
+    let result = generator.next();
+
+    while (!result.done) {
+      const expr = result.value;
+      if (expr instanceof IfExpr) {
+        bodyStr += TAB + expr.toString(TAB) + "\n";
+      } else if (expr instanceof BaseExpr) {
+        bodyStr += TAB + expr.toString() + "\n";
+      } else {
+        bodyStr += TAB + JSON.stringify(expr) + "\n";
+      }
+      result = generator.next();
+    }
+
+    // Handle return value
+    if (result.value !== undefined) {
+      const returnExpr = result.value;
+      if (returnExpr instanceof BaseExpr) {
+        bodyStr += TAB + "return " + returnExpr.toString() + ";\n";
+      } else {
+        bodyStr += TAB + "return " + JSON.stringify(returnExpr) + ";\n";
+      }
+    }
+
+    bodyStr += "}";
+
+    return `${typeParamsStr}(${params})${returnTypeStr} => ${bodyStr}`;
   }
 }
 
@@ -339,21 +461,21 @@ class FunctionCallExpr extends BaseExpr {
   }
 
   toString(): string {
-    const funcStr = this.functionRef instanceof BaseExpr 
-      ? this.functionRef.toString() 
-      : typeof this.functionRef === 'string' 
-        ? this.functionRef
-        : JSON.stringify(this.functionRef);
-    
+    const funcStr =
+      this.functionRef instanceof BaseExpr
+        ? this.functionRef.toString()
+        : typeof this.functionRef === "string"
+          ? this.functionRef
+          : JSON.stringify(this.functionRef);
+
     const argsStr = this.args
       .map((arg) => {
-        const argStr = arg instanceof BaseExpr 
-          ? arg.toString() 
-          : JSON.stringify(arg);
+        const argStr =
+          arg instanceof BaseExpr ? arg.toString() : JSON.stringify(arg);
         return argStr;
       })
       .join(", ");
-    
+
     return `${funcStr}(${argsStr})`;
   }
 }
@@ -368,21 +490,21 @@ class MethodCallExpr extends BaseExpr {
   }
 
   toString(): string {
-    const objStr = this.object instanceof BaseExpr 
-      ? this.object.toString() 
-      : typeof this.object === 'string' 
-        ? this.object
-        : JSON.stringify(this.object);
-    
+    const objStr =
+      this.object instanceof BaseExpr
+        ? this.object.toString()
+        : typeof this.object === "string"
+          ? this.object
+          : JSON.stringify(this.object);
+
     const argsStr = this.args
       .map((arg) => {
-        const argStr = arg instanceof BaseExpr 
-          ? arg.toString() 
-          : JSON.stringify(arg);
+        const argStr =
+          arg instanceof BaseExpr ? arg.toString() : JSON.stringify(arg);
         return argStr;
       })
       .join(", ");
-    
+
     return `${objStr}.${this.method}(${argsStr})`;
   }
 }
@@ -403,6 +525,8 @@ type Expr =
   | BoolExpr
   | LetExpr
   | IfExpr
+  | ForExpr
+  | WhileExpr
   | ObjectExpr
   | ArrayExpr
   | FunctionExpr
@@ -415,6 +539,7 @@ type Expr =
 
 type Primitive = number | string | boolean | symbol | Record<string, any>;
 type ValueExpr = Expr | Primitive;
+type FunctionBody = () => Generator<ValueExpr, ValueExpr>;
 
 function printValue(val: ValueExpr) {
   if (val instanceof BaseExpr) {
@@ -462,7 +587,7 @@ const val = {
 
   fn: (
     params: Array<{ name: string; type?: BaseType }>,
-    body: Expr,
+    body: () => Generator<ValueExpr, ValueExpr>,
     returnType?: BaseType,
     typeParams?: string[]
   ) => new FunctionExpr(params, body, returnType, typeParams),
@@ -473,11 +598,35 @@ const val = {
 
   block: (fn: () => Generator<ValueExpr>) => new BlockExpr(fn),
 
+  fnBlock: (fn: () => Generator<ValueExpr, ValueExpr>) => fn,
+
   call: (functionRef: ValueExpr, args: ValueExpr[] = []) =>
     new FunctionCallExpr(functionRef, args),
 
   methodCall: (object: ValueExpr, method: string, args: ValueExpr[] = []) =>
     new MethodCallExpr(object, method, args),
+
+  forOf: (
+    variable: string,
+    iterable: ValueExpr,
+    body: () => Generator<ValueExpr>
+  ) => new ForExpr(undefined, variable, iterable, body, "for-of"),
+
+  forIn: (
+    variable: string,
+    iterable: ValueExpr,
+    body: () => Generator<ValueExpr>
+  ) => new ForExpr(undefined, variable, iterable, body, "for-in"),
+
+  for: (
+    init: ValueExpr,
+    condition: string,
+    increment: ValueExpr,
+    body: () => Generator<ValueExpr>
+  ) => new ForExpr(init, condition, increment, body, "for"),
+
+  while: (condition: ValueExpr, body: () => Generator<ValueExpr>) =>
+    new WhileExpr(condition, body),
 };
 
 export const type = {
@@ -555,7 +704,9 @@ const cw = CodeWriter(function* () {
             ),
           },
         ],
-        val.array([]),
+        function* () {
+          return val.array([]);
+        },
         type.array(type.primitive("T")),
         ["T"]
       )
@@ -580,21 +731,23 @@ const cw2 = CodeWriter(function* () {
     );
     yield* val.let("items", val.array([1, "hello", val.string("world"), true]));
 
-    // Function definition
     yield* val.let(
-      "add", 
+      "add",
       val.fn(
-        [{ name: "a", type: type.primitive("number") }, { name: "b", type: type.primitive("number") }],
-        val.raw("a + b"),
+        [
+          { name: "a", type: type.primitive("number") },
+          { name: "b", type: type.primitive("number") },
+        ],
+        function* () {
+          return val.raw("a + b");
+        },
         type.primitive("number")
       )
     );
 
-    // Function calls - different styles
     yield* val.let("result1", val.call("add", [5, 3]));
     yield* val.let("result2", val.call(val.raw("Math.max"), [10, 20, 5]));
-    
-    // Method calls
+
     yield* val.methodCall("console", "log", ["Hello from method call!"]);
     yield* val.methodCall(val.raw("items"), "push", [42]);
     yield* val.methodCall("user", "toString", []);
@@ -612,5 +765,105 @@ const cw2 = CodeWriter(function* () {
 });
 
 console.log(cw.run());
-// console.log("\n\n\n");
+console.log("\n" + "=".repeat(50) + "\n");
 console.log(cw2.run());
+
+const someFn = CodeWriter(function* () {
+  yield* val.let(
+    "complexFunction",
+    val.fn(
+      [
+        { name: "items", type: type.array(type.primitive("number")) },
+        { name: "threshold", type: type.primitive("number") },
+      ],
+      val.fnBlock(function* () {
+        yield* val.let("result", val.array([]));
+        yield* val.if(
+          val.raw("item > threshold"),
+          val.block(function* () {
+            yield* val.methodCall("result", "push", ["item"]);
+          }),
+          val.block(function* () {
+            yield* val.raw("// skip item");
+          })
+        );
+        return val.raw("result");
+      }),
+      type.array(type.primitive("number"))
+    )
+  );
+});
+
+console.log("\n" + "=".repeat(50) + "\n");
+console.log(someFn.run());
+
+// Test loops
+const loopExamples = CodeWriter(function* () {
+  yield* val.block(function* () {
+    // For-of loop
+    yield* val.forOf("item", "items", function* () {
+      yield* val.methodCall("console", "log", ["item"]);
+      yield* val.if(
+        val.raw("item > 5"),
+        val.block(function* () {
+          yield* val.raw("continue");
+        }),
+        val.block(function* () {
+          yield* val.raw("// process item");
+        })
+      );
+    });
+
+    yield* val.nl();
+
+    // For-in loop
+    yield* val.forIn("key", "obj", function* () {
+      yield* val.methodCall("console", "log", [
+        val.raw("key + ': ' + obj[key]"),
+      ]);
+    });
+
+    yield* val.nl();
+
+    // Traditional for loop
+    yield* val.for(
+      val.raw("let i = 0"),
+      "i < 10",
+      val.raw("i++"),
+      function* () {
+        yield* val.methodCall("console", "log", ["i"]);
+        yield* val.if(
+          val.raw("i === 5"),
+          val.block(function* () {
+            yield* val.raw("break");
+          }),
+          val.block(function* () {
+            // continue
+          })
+        );
+      }
+    );
+
+    yield* val.nl();
+
+    // While loop
+    yield* val.let("count", 0);
+    yield* val.while(val.raw("count < 3"), function* () {
+      yield* val.methodCall("console", "log", [val.raw("`Count: ${count}`")]);
+      yield* val.raw("count++");
+    });
+
+    yield* val.nl();
+
+    // Nested loops
+    yield* val.forOf("row", "matrix", function* () {
+      yield* val.forOf("cell", "row", function* () {
+        yield* val.methodCall("console", "log", ["cell"]);
+      });
+    });
+  });
+});
+
+console.log("\n" + "=".repeat(50) + "\n");
+console.log("LOOP EXAMPLES:");
+console.log(loopExamples.run());
