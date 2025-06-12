@@ -330,6 +330,63 @@ export class IntersectionType extends BaseType {
   }
 }
 
+class FunctionCallExpr extends BaseExpr {
+  constructor(
+    public functionRef: ValueExpr,
+    public args: ValueExpr[]
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const funcStr = this.functionRef instanceof BaseExpr 
+      ? this.functionRef.toString() 
+      : typeof this.functionRef === 'string' 
+        ? this.functionRef
+        : JSON.stringify(this.functionRef);
+    
+    const argsStr = this.args
+      .map((arg) => {
+        const argStr = arg instanceof BaseExpr 
+          ? arg.toString() 
+          : JSON.stringify(arg);
+        return argStr;
+      })
+      .join(", ");
+    
+    return `${funcStr}(${argsStr})`;
+  }
+}
+
+class MethodCallExpr extends BaseExpr {
+  constructor(
+    public object: ValueExpr,
+    public method: string,
+    public args: ValueExpr[]
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const objStr = this.object instanceof BaseExpr 
+      ? this.object.toString() 
+      : typeof this.object === 'string' 
+        ? this.object
+        : JSON.stringify(this.object);
+    
+    const argsStr = this.args
+      .map((arg) => {
+        const argStr = arg instanceof BaseExpr 
+          ? arg.toString() 
+          : JSON.stringify(arg);
+        return argStr;
+      })
+      .join(", ");
+    
+    return `${objStr}.${this.method}(${argsStr})`;
+  }
+}
+
 class RawExpr extends BaseExpr {
   constructor(public code: string) {
     super();
@@ -349,6 +406,8 @@ type Expr =
   | ObjectExpr
   | ArrayExpr
   | FunctionExpr
+  | FunctionCallExpr
+  | MethodCallExpr
   | TypeAliasExpr
   | InterfaceExpr
   | RawExpr
@@ -413,6 +472,12 @@ const val = {
   nl: () => new RawExpr("\n"),
 
   block: (fn: () => Generator<ValueExpr>) => new BlockExpr(fn),
+
+  call: (functionRef: ValueExpr, args: ValueExpr[] = []) =>
+    new FunctionCallExpr(functionRef, args),
+
+  methodCall: (object: ValueExpr, method: string, args: ValueExpr[] = []) =>
+    new MethodCallExpr(object, method, args),
 };
 
 export const type = {
@@ -513,7 +578,26 @@ const cw2 = CodeWriter(function* () {
         isReal: true,
       })
     );
-    yield* val.let("items", [1, "hello", "hi there", true]);
+    yield* val.let("items", val.array([1, "hello", val.string("world"), true]));
+
+    // Function definition
+    yield* val.let(
+      "add", 
+      val.fn(
+        [{ name: "a", type: type.primitive("number") }, { name: "b", type: type.primitive("number") }],
+        val.raw("a + b"),
+        type.primitive("number")
+      )
+    );
+
+    // Function calls - different styles
+    yield* val.let("result1", val.call("add", [5, 3]));
+    yield* val.let("result2", val.call(val.raw("Math.max"), [10, 20, 5]));
+    
+    // Method calls
+    yield* val.methodCall("console", "log", ["Hello from method call!"]);
+    yield* val.methodCall(val.raw("items"), "push", [42]);
+    yield* val.methodCall("user", "toString", []);
 
     yield* val.if(
       true,
