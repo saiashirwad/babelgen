@@ -22,7 +22,7 @@ const TAB = "  ";
 abstract class BaseExpr {
   abstract toString(): string;
 
-  *[Symbol.iterator]() {
+  *[Symbol.iterator](): Generator<this, any> {
     yield this;
   }
 }
@@ -35,7 +35,11 @@ class BlockExpr extends BaseExpr {
   toString(indent = "") {
     let result = "{\n";
     for (const e of this.block()) {
-      if (e instanceof IfExpr || e instanceof ForExpr || e instanceof WhileExpr) {
+      if (
+        e instanceof IfExpr ||
+        e instanceof ForExpr ||
+        e instanceof WhileExpr
+      ) {
         result += indent + TAB + e.toString(indent + TAB) + "\n";
       } else if (e instanceof BaseExpr) {
         result += indent + TAB + e.toString() + "\n";
@@ -45,6 +49,19 @@ class BlockExpr extends BaseExpr {
     }
 
     return result + indent + "}";
+  }
+}
+
+class VarRef extends BaseExpr {
+  constructor(
+    public name: string,
+    public type?: BaseType
+  ) {
+    super();
+  }
+
+  toString(): string {
+    return this.name;
   }
 }
 
@@ -107,6 +124,11 @@ class LetExpr extends BaseExpr {
         : JSON.stringify(this.value);
     return `let ${this.name}${typeAnnotation} = ${valueStr};`;
   }
+
+  *[Symbol.iterator]() {
+    yield this;
+    return new VarRef(this.name, this.type);
+  }
 }
 
 class IfExpr extends BaseExpr {
@@ -136,7 +158,7 @@ class ForExpr extends BaseExpr {
     public init: ValueExpr | undefined,
     public variable: string,
     public iterable: ValueExpr,
-    public body: () => Generator<ValueExpr>,
+    public body: (loopVar: VarRef) => Generator<ValueExpr>,
     public type: "for-of" | "for-in" | "for" = "for-of"
   ) {
     super();
@@ -172,7 +194,8 @@ class ForExpr extends BaseExpr {
     }
 
     result += "{\n";
-    for (const expr of this.body()) {
+    const loopVar = new VarRef(this.variable);
+    for (const expr of this.body(loopVar)) {
       if (
         expr instanceof IfExpr ||
         expr instanceof ForExpr ||
@@ -272,7 +295,9 @@ class ArrayExpr extends BaseExpr {
 class FunctionExpr extends BaseExpr {
   constructor(
     public params: Array<{ name: string; type?: BaseType }>,
-    public body: () => Generator<ValueExpr, ValueExpr>,
+    public body: (
+      args: Record<string, VarRef>
+    ) => Generator<ValueExpr, ValueExpr>,
     public returnType?: BaseType,
     public typeParams?: string[]
   ) {
@@ -293,7 +318,14 @@ class FunctionExpr extends BaseExpr {
       : "";
 
     let bodyStr = "{\n";
-    const generator = this.body();
+    const args = this.params.reduce(
+      (acc, param) => {
+        acc[param.name] = new VarRef(param.name, param.type);
+        return acc;
+      },
+      {} as Record<string, VarRef>
+    );
+    const generator = this.body(args);
     let result = generator.next();
 
     while (!result.done) {
@@ -519,7 +551,106 @@ class RawExpr extends BaseExpr {
   }
 }
 
+class BinaryOpExpr extends BaseExpr {
+  constructor(
+    public left: ValueExpr,
+    public operator: string,
+    public right: ValueExpr
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const leftStr =
+      this.left instanceof BaseExpr
+        ? this.left.toString()
+        : JSON.stringify(this.left);
+    const rightStr =
+      this.right instanceof BaseExpr
+        ? this.right.toString()
+        : JSON.stringify(this.right);
+    return `${leftStr} ${this.operator} ${rightStr}`;
+  }
+}
+
+class UnaryOpExpr extends BaseExpr {
+  constructor(
+    public operator: string,
+    public operand: ValueExpr,
+    public prefix: boolean = true
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const operandStr =
+      this.operand instanceof BaseExpr
+        ? this.operand.toString()
+        : JSON.stringify(this.operand);
+    return this.prefix
+      ? `${this.operator}${operandStr}`
+      : `${operandStr}${this.operator}`;
+  }
+}
+
+class PropertyAccessExpr extends BaseExpr {
+  constructor(
+    public object: ValueExpr,
+    public property: ValueExpr,
+    public computed: boolean = false
+  ) {
+    super();
+  }
+
+  toString(): string {
+    const objStr =
+      this.object instanceof BaseExpr
+        ? this.object.toString()
+        : JSON.stringify(this.object);
+
+    if (this.computed) {
+      const propStr =
+        this.property instanceof BaseExpr
+          ? this.property.toString()
+          : JSON.stringify(this.property);
+      return `${objStr}[${propStr}]`;
+    } else {
+      const propStr =
+        this.property instanceof BaseExpr
+          ? this.property.toString()
+          : JSON.stringify(this.property);
+      return `${objStr}.${propStr}`;
+    }
+  }
+}
+
+class TemplateLiteralExpr extends BaseExpr {
+  constructor(
+    public parts: string[],
+    public expressions: ValueExpr[]
+  ) {
+    super();
+  }
+
+  toString(): string {
+    let result = "`";
+    for (let i = 0; i < this.parts.length; i++) {
+      result += this.parts[i];
+      if (i < this.expressions.length) {
+        const exprStr =
+          this.expressions[i] instanceof BaseExpr
+            ? this.expressions[i].toString()
+            : JSON.stringify(this.expressions[i]);
+        result += `\${${exprStr}}`;
+      }
+    }
+    result += "`";
+    return result;
+  }
+}
+
 type Expr =
+  | VarRef
   | NumberExpr
   | StringExpr
   | BoolExpr
@@ -535,7 +666,11 @@ type Expr =
   | TypeAliasExpr
   | InterfaceExpr
   | RawExpr
-  | BlockExpr;
+  | BlockExpr
+  | BinaryOpExpr
+  | UnaryOpExpr
+  | PropertyAccessExpr
+  | TemplateLiteralExpr;
 
 type Primitive = number | string | boolean | symbol | Record<string, any>;
 type ValueExpr = Expr | Primitive;
@@ -587,7 +722,7 @@ const val = {
 
   fn: (
     params: Array<{ name: string; type?: BaseType }>,
-    body: () => Generator<ValueExpr, ValueExpr>,
+    body: (args: Record<string, VarRef>) => Generator<ValueExpr, ValueExpr>,
     returnType?: BaseType,
     typeParams?: string[]
   ) => new FunctionExpr(params, body, returnType, typeParams),
@@ -598,7 +733,9 @@ const val = {
 
   block: (fn: () => Generator<ValueExpr>) => new BlockExpr(fn),
 
-  fnBlock: (fn: () => Generator<ValueExpr, ValueExpr>) => fn,
+  fnBlock: (
+    fn: (args: Record<string, VarRef>) => Generator<ValueExpr, ValueExpr>
+  ) => fn,
 
   call: (functionRef: ValueExpr, args: ValueExpr[] = []) =>
     new FunctionCallExpr(functionRef, args),
@@ -609,24 +746,79 @@ const val = {
   forOf: (
     variable: string,
     iterable: ValueExpr,
-    body: () => Generator<ValueExpr>
+    body: (loopVar: VarRef) => Generator<ValueExpr>
   ) => new ForExpr(undefined, variable, iterable, body, "for-of"),
 
   forIn: (
     variable: string,
     iterable: ValueExpr,
-    body: () => Generator<ValueExpr>
+    body: (loopVar: VarRef) => Generator<ValueExpr>
   ) => new ForExpr(undefined, variable, iterable, body, "for-in"),
 
   for: (
     init: ValueExpr,
     condition: string,
     increment: ValueExpr,
-    body: () => Generator<ValueExpr>
+    body: (loopVar: VarRef) => Generator<ValueExpr>
   ) => new ForExpr(init, condition, increment, body, "for"),
 
   while: (condition: ValueExpr, body: () => Generator<ValueExpr>) =>
     new WhileExpr(condition, body),
+
+  // Binary operations
+  add: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "+", right),
+  subtract: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "-", right),
+  multiply: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "*", right),
+  divide: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "/", right),
+  modulo: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "%", right),
+  power: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "**", right),
+
+  // Comparison operations
+  gt: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, ">", right),
+  lt: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "<", right),
+  gte: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, ">=", right),
+  lte: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "<=", right),
+  eq: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "==", right),
+  strictEq: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "===", right),
+  neq: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "!=", right),
+  strictNeq: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "!==", right),
+
+  // Logical operations
+  and: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "&&", right),
+  or: (left: ValueExpr, right: ValueExpr) =>
+    new BinaryOpExpr(left, "||", right),
+
+  // Unary operations
+  not: (operand: ValueExpr) => new UnaryOpExpr("!", operand),
+  negate: (operand: ValueExpr) => new UnaryOpExpr("-", operand),
+  plus: (operand: ValueExpr) => new UnaryOpExpr("+", operand),
+  increment: (operand: ValueExpr, prefix = true) =>
+    new UnaryOpExpr("++", operand, prefix),
+  decrement: (operand: ValueExpr, prefix = true) =>
+    new UnaryOpExpr("--", operand, prefix),
+
+  // Property access
+  prop: (object: ValueExpr, property: string) =>
+    new PropertyAccessExpr(object, property, false),
+  index: (object: ValueExpr, index: ValueExpr) =>
+    new PropertyAccessExpr(object, index, true),
+
+  // Template literal
+  template: (parts: string[], ...expressions: ValueExpr[]) =>
+    new TemplateLiteralExpr(parts, expressions),
 };
 
 export const type = {
@@ -738,7 +930,7 @@ const cw2 = CodeWriter(function* () {
           { name: "a", type: type.primitive("number") },
           { name: "b", type: type.primitive("number") },
         ],
-        function* () {
+        function* (vars) {
           return val.raw("a + b");
         },
         type.primitive("number")
@@ -846,11 +1038,10 @@ const loopExamples = CodeWriter(function* () {
 
     yield* val.nl();
 
-    // While loop
-    yield* val.let("count", 0);
+    let count = yield* val.let("count", 0);
     yield* val.while(val.raw("count < 3"), function* () {
       yield* val.methodCall("console", "log", [val.raw("`Count: ${count}`")]);
-      yield* val.raw("count++");
+      val.increment(count, false);
     });
 
     yield* val.nl();
@@ -867,3 +1058,101 @@ const loopExamples = CodeWriter(function* () {
 console.log("\n" + "=".repeat(50) + "\n");
 console.log("LOOP EXAMPLES:");
 console.log(loopExamples.run());
+
+// Test new type-safe variable reference system
+const typeSafeExample = CodeWriter(function* () {
+  yield* val.block(function* () {
+    // Create variables and get references
+    const user = yield* val.let(
+      "user",
+      val.object({
+        name: "Alice",
+        age: 30,
+      })
+    );
+
+    const items = yield* val.let("items", [1, 2, 3, 4, 5]);
+
+    yield* val.methodCall(user, "toString", []);
+    yield* val.methodCall("console", "log", [user]);
+
+    yield* val.forOf("item", items, function* (item) {
+      yield* val.methodCall("console", "log", [item]);
+      yield* val.if(
+        val.raw(`${item.toString()} > 3`),
+        val.block(function* () {
+          yield* val.methodCall("console", "log", ["Item is greater than 3"]);
+        }),
+        val.block(function* () {
+          yield* val.methodCall("console", "log", ["Item is 3 or less"]);
+        })
+      );
+    });
+
+    const processUser = yield* val.let(
+      "processUser",
+      val.fn(
+        [
+          { name: "userParam", type: type.primitive("any") },
+          { name: "multiplier", type: type.primitive("number") },
+        ],
+        function* (args) {
+          yield* val.methodCall("console", "log", [args.userParam]);
+          const result = yield* val.let(
+            "result",
+            val.raw(
+              `${args.userParam.toString()}.age * ${args.multiplier.toString()}`
+            )
+          );
+          return result;
+        },
+        type.primitive("number")
+      )
+    );
+
+    // Call the function using variable references
+    yield* val.call(processUser, [user, 2]);
+  });
+});
+
+// Test arithmetic and binary operations
+const operationsExample = CodeWriter(function* () {
+  yield* val.block(function* () {
+    const a = yield* val.let("a", 10);
+    const b = yield* val.let("b", 5);
+    const user = yield* val.let("user", val.object({ name: "Alice", age: 30 }));
+
+    // Replace: val.raw("a + b")
+    const sum = yield* val.let("sum", val.add(a, b));
+
+    // Replace: val.raw("a > b")
+    yield* val.if(
+      val.gt(a, b),
+      val.block(function* () {
+        yield* val.methodCall("console", "log", ["a is greater than b"]);
+      }),
+      val.block(function* () {
+        yield* val.methodCall("console", "log", ["a is not greater than b"]);
+      })
+    );
+
+    const age = yield* val.let("age", val.prop(user, "age"));
+
+    const doubleAge = yield* val.let(
+      "doubleAge",
+      val.multiply(val.prop(user, "age"), 2)
+    );
+
+    // Replace: val.raw("`Hello ${name}`")
+    const greeting = yield* val.let(
+      "greeting",
+      val.template(["Hello ", "!"], val.prop(user, "name"))
+    );
+
+    yield* val.methodCall("console", "log", [greeting]);
+  });
+});
+
+console.log("\n" + "=".repeat(50) + "\n");
+console.log("ARITHMETIC & BINARY OPERATIONS:");
+console.log(operationsExample.run());
