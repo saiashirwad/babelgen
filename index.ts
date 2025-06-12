@@ -28,7 +28,7 @@ abstract class BaseExpr {
 }
 
 class BlockExpr extends BaseExpr {
-  constructor(public block: () => Generator<Expr>) {
+  constructor(public block: () => Generator<ValueExpr>) {
     super();
   }
 
@@ -37,8 +37,10 @@ class BlockExpr extends BaseExpr {
     for (const e of this.block()) {
       if (e instanceof IfExpr) {
         result += indent + TAB + e.toString(indent + TAB) + "\n";
-      } else {
+      } else if (e instanceof BaseExpr) {
         result += indent + TAB + e.toString() + "\n";
+      } else {
+        result += indent + TAB + JSON.stringify(e) + "\n";
       }
     }
 
@@ -109,7 +111,7 @@ class LetExpr extends BaseExpr {
 
 class IfExpr extends BaseExpr {
   constructor(
-    public condition: Expr,
+    public condition: ValueExpr,
     public thenBranch: BlockExpr,
     public elseBranch: BlockExpr
   ) {
@@ -117,7 +119,11 @@ class IfExpr extends BaseExpr {
   }
 
   toString(indent = ""): string {
-    let result = "if (" + this.condition.toString() + ") ";
+    const conditionStr =
+      this.condition instanceof BaseExpr
+        ? this.condition.toString()
+        : JSON.stringify(this.condition);
+    let result = "if (" + conditionStr + ") ";
     result += this.thenBranch.toString(indent);
     result += " else ";
     result += this.elseBranch.toString(indent);
@@ -148,7 +154,7 @@ class ObjectExpr extends BaseExpr {
 
 class ArrayExpr extends BaseExpr {
   constructor(
-    public elements: Expr[],
+    public elements: ValueExpr[],
     public type?: BaseType
   ) {
     super();
@@ -156,7 +162,13 @@ class ArrayExpr extends BaseExpr {
 
   toString(): string {
     const elements = this.elements
-      .map((element) => element.toString())
+      .map((element) => {
+        const elementStr =
+          element instanceof BaseExpr
+            ? element.toString()
+            : JSON.stringify(element);
+        return elementStr;
+      })
       .join(", ");
     const typeAnnotation = this.type ? `: ${this.type.toString()}` : "";
     return `[ ${elements} ]${typeAnnotation}`;
@@ -354,18 +366,6 @@ function printValue(val: ValueExpr) {
   }
 }
 
-// class CodeWriter<const Y> {
-//   constructor(public write: () => Generator<Y, void>) {}
-
-//   run() {
-//     let result = "";
-//     for (const value of this.write()) {
-//       result += value;
-//     }
-//     return result;
-//   }
-// }
-
 type CodeWriter = {
   run: () => string;
 };
@@ -392,13 +392,14 @@ const val = {
   let: (name: string, value: ValueExpr, type?: BaseType) =>
     new LetExpr(name, value, type),
 
-  if: (condition: Expr, thenBranch: BlockExpr, elseBranch: BlockExpr) =>
+  if: (condition: ValueExpr, thenBranch: BlockExpr, elseBranch: BlockExpr) =>
     new IfExpr(condition, thenBranch, elseBranch),
 
   object: (properties: Record<string, ValueExpr>, type?: BaseType) =>
     new ObjectExpr(properties, type),
 
-  array: (elements: Expr[], type?: BaseType) => new ArrayExpr(elements, type),
+  array: (elements: ValueExpr[], type?: BaseType) =>
+    new ArrayExpr(elements, type),
 
   fn: (
     params: Array<{ name: string; type?: BaseType }>,
@@ -411,7 +412,7 @@ const val = {
 
   nl: () => new RawExpr("\n"),
 
-  block: (fn: () => Generator<Expr>) => new BlockExpr(fn),
+  block: (fn: () => Generator<ValueExpr>) => new BlockExpr(fn),
 };
 
 export const type = {
@@ -512,14 +513,15 @@ const cw2 = CodeWriter(function* () {
         isReal: true,
       })
     );
+    yield* val.let("items", val.array([1, "hello", val.string("world"), true]));
 
     yield* val.if(
-      val.bool(true),
+      true,
       val.block(function* () {
         yield* val.raw("console.log('Hello World!')");
       }),
       val.block(function* () {
-        yield* val.raw("console.log('Hello World!')");
+        yield* val.raw("console.log('Goodbye!')");
       })
     );
   });
