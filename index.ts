@@ -42,7 +42,11 @@ class BlockExpr extends BaseExpr {
       ) {
         result += indent + TAB + e.toString(indent + TAB) + "\n";
       } else if (e instanceof BaseExpr) {
-        result += indent + TAB + e.toString() + "\n";
+        const lines = e.toString().split('\n');
+        result += indent + TAB + lines[0] + "\n";
+        for (let i = 1; i < lines.length; i++) {
+          result += indent + TAB + lines[i] + "\n";
+        }
       } else {
         result += indent + TAB + JSON.stringify(e) + "\n";
       }
@@ -171,13 +175,13 @@ class ForExpr extends BaseExpr {
       const iterableStr =
         this.iterable instanceof BaseExpr
           ? this.iterable.toString()
-          : JSON.stringify(this.iterable);
+          : String(this.iterable);
       result = `for (const ${this.variable} of ${iterableStr}) `;
     } else if (this.type === "for-in") {
       const iterableStr =
         this.iterable instanceof BaseExpr
           ? this.iterable.toString()
-          : JSON.stringify(this.iterable);
+          : String(this.iterable);
       result = `for (const ${this.variable} in ${iterableStr}) `;
     } else {
       // Traditional for loop
@@ -596,7 +600,7 @@ class UnaryOpExpr extends BaseExpr {
 class PropertyAccessExpr extends BaseExpr {
   constructor(
     public object: ValueExpr,
-    public property: ValueExpr,
+    public property: ValueExpr | string,
     public computed: boolean = false
   ) {
     super();
@@ -618,7 +622,7 @@ class PropertyAccessExpr extends BaseExpr {
       const propStr =
         this.property instanceof BaseExpr
           ? this.property.toString()
-          : JSON.stringify(this.property);
+          : String(this.property);
       return `${objStr}.${propStr}`;
     }
   }
@@ -931,26 +935,28 @@ const cw2 = CodeWriter(function* () {
           { name: "b", type: type.primitive("number") },
         ],
         function* (vars) {
-          return val.raw("a + b");
+          return val.add(vars.a, vars.b);
         },
         type.primitive("number")
       )
     );
 
     yield* val.let("result1", val.call("add", [5, 3]));
-    yield* val.let("result2", val.call(val.raw("Math.max"), [10, 20, 5]));
+    const mathRef = new VarRef("Math");
+    yield* val.let("result2", val.call(val.prop(mathRef, "max"), [10, 20, 5]));
 
     yield* val.methodCall("console", "log", ["Hello from method call!"]);
-    yield* val.methodCall(val.raw("items"), "push", [42]);
+    const itemsRef = new VarRef("items");
+    yield* val.methodCall(itemsRef, "push", [42]);
     yield* val.methodCall("user", "toString", []);
 
     yield* val.if(
       true,
       val.block(function* () {
-        yield* val.raw("console.log('Hello World!')");
+        yield* val.methodCall("console", "log", ["Hello World!"]);
       }),
       val.block(function* () {
-        yield* val.raw("console.log('Goodbye!')");
+        yield* val.methodCall("console", "log", ["Goodbye!"]);
       })
     );
   });
@@ -968,18 +974,18 @@ const someFn = CodeWriter(function* () {
         { name: "items", type: type.array(type.primitive("number")) },
         { name: "threshold", type: type.primitive("number") },
       ],
-      val.fnBlock(function* () {
-        yield* val.let("result", val.array([]));
+      val.fnBlock(function* (args) {
+        let result = yield* val.let("result", val.array([]));
         yield* val.if(
-          val.raw("item > threshold"),
+          val.gt(args.items, args.threshold),
           val.block(function* () {
-            yield* val.methodCall("result", "push", ["item"]);
+            yield* val.methodCall("result", "push", [args.items]);
           }),
           val.block(function* () {
-            yield* val.raw("// skip item");
+            // skip item
           })
         );
-        return val.raw("result");
+        return new VarRef("result");
       }),
       type.array(type.primitive("number"))
     )
@@ -993,15 +999,15 @@ console.log(someFn.run());
 const loopExamples = CodeWriter(function* () {
   yield* val.block(function* () {
     // For-of loop
-    yield* val.forOf("item", "items", function* () {
-      yield* val.methodCall("console", "log", ["item"]);
+    yield* val.forOf("item", "items", function* (item) {
+      yield* val.methodCall("console", "log", [item]);
       yield* val.if(
-        val.raw("item > 5"),
+        val.gt(item, 5),
         val.block(function* () {
-          yield* val.raw("continue");
+          yield* new RawExpr("continue");
         }),
         val.block(function* () {
-          yield* val.raw("// process item");
+          // process item
         })
       );
     });
@@ -1009,25 +1015,27 @@ const loopExamples = CodeWriter(function* () {
     yield* val.nl();
 
     // For-in loop
-    yield* val.forIn("key", "obj", function* () {
+    yield* val.forIn("key", "obj", function* (key) {
+      const objRef = new VarRef("obj");
       yield* val.methodCall("console", "log", [
-        val.raw("key + ': ' + obj[key]"),
+        val.add(val.add(key, ": "), val.index(objRef, key)),
       ]);
     });
 
     yield* val.nl();
 
     // Traditional for loop
+    const iRef = new VarRef("i");
     yield* val.for(
-      val.raw("let i = 0"),
+      new RawExpr("let i = 0"),
       "i < 10",
-      val.raw("i++"),
+      val.increment(iRef, false),
       function* () {
-        yield* val.methodCall("console", "log", ["i"]);
+        yield* val.methodCall("console", "log", [iRef]);
         yield* val.if(
-          val.raw("i === 5"),
+          val.strictEq(iRef, 5),
           val.block(function* () {
-            yield* val.raw("break");
+            yield* new RawExpr("break");
           }),
           val.block(function* () {
             // continue
@@ -1039,8 +1047,10 @@ const loopExamples = CodeWriter(function* () {
     yield* val.nl();
 
     let count = yield* val.let("count", 0);
-    yield* val.while(val.raw("count < 3"), function* () {
-      yield* val.methodCall("console", "log", [val.raw("`Count: ${count}`")]);
+    yield* val.while(val.lt(count, 3), function* () {
+      yield* val.methodCall("console", "log", [
+        val.template(["Count: ", ""], count),
+      ]);
       val.increment(count, false);
     });
 
@@ -1062,7 +1072,6 @@ console.log(loopExamples.run());
 // Test new type-safe variable reference system
 const typeSafeExample = CodeWriter(function* () {
   yield* val.block(function* () {
-    // Create variables and get references
     const user = yield* val.let(
       "user",
       val.object({
@@ -1079,7 +1088,7 @@ const typeSafeExample = CodeWriter(function* () {
     yield* val.forOf("item", items, function* (item) {
       yield* val.methodCall("console", "log", [item]);
       yield* val.if(
-        val.raw(`${item.toString()} > 3`),
+        val.gt(item, 3),
         val.block(function* () {
           yield* val.methodCall("console", "log", ["Item is greater than 3"]);
         }),
@@ -1100,9 +1109,7 @@ const typeSafeExample = CodeWriter(function* () {
           yield* val.methodCall("console", "log", [args.userParam]);
           const result = yield* val.let(
             "result",
-            val.raw(
-              `${args.userParam.toString()}.age * ${args.multiplier.toString()}`
-            )
+            val.multiply(val.prop(args.userParam, "age"), args.multiplier)
           );
           return result;
         },
@@ -1110,22 +1117,18 @@ const typeSafeExample = CodeWriter(function* () {
       )
     );
 
-    // Call the function using variable references
     yield* val.call(processUser, [user, 2]);
   });
 });
 
-// Test arithmetic and binary operations
 const operationsExample = CodeWriter(function* () {
   yield* val.block(function* () {
     const a = yield* val.let("a", 10);
     const b = yield* val.let("b", 5);
     const user = yield* val.let("user", val.object({ name: "Alice", age: 30 }));
 
-    // Replace: val.raw("a + b")
     const sum = yield* val.let("sum", val.add(a, b));
 
-    // Replace: val.raw("a > b")
     yield* val.if(
       val.gt(a, b),
       val.block(function* () {
@@ -1143,7 +1146,6 @@ const operationsExample = CodeWriter(function* () {
       val.multiply(val.prop(user, "age"), 2)
     );
 
-    // Replace: val.raw("`Hello ${name}`")
     const greeting = yield* val.let(
       "greeting",
       val.template(["Hello ", "!"], val.prop(user, "name"))
