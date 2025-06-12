@@ -513,7 +513,7 @@ const cw2 = CodeWriter(function* () {
         isReal: true,
       })
     );
-    yield* val.let("items", val.array([1, "hello", val.string("world"), true]));
+    yield* val.let("items", [1, "hello", "hi there", true]);
 
     yield* val.if(
       true,
