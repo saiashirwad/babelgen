@@ -13,5 +13,14 @@
     "@babel/cli": "^7.27.2",
     "@babel/core": "^7.27.4",
     "@babel/preset-typescript": "^7.27.1"
+  },
+  "prettier": {
+    "printWidth": 100,
+    "useTabs": false,
+    "semi": false,
+    "trailingComma": "none",
+    "experimentalTernaries": true,
+    "experimentalOperatorPosition": "end",
+    "arrowParens": "avoid"
   }
 }
