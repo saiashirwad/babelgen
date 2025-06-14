@@ -52,6 +52,7 @@ class BlockExpr extends BaseExpr {
 }
 
 class VarRef<const Type> extends BaseExpr {
+  declare readonly __type: Type
   constructor(
     public name: string,
     public type?: BaseType
@@ -671,6 +672,7 @@ class PropertyAccessExpr<
   const Property extends keyof VarRefInner<Value>,
   const PropertyType = VarRefInner<Value>[Property]
 > extends BaseExpr {
+  declare readonly __type: PropertyType
   constructor(
     public object: Value,
     public property: Property,
@@ -757,7 +759,7 @@ type Primitive = number | string | boolean | symbol | Record<string, any>
 type ValueExpr = Expr | Primitive
 type FunctionBody = () => Generator<ValueExpr, ValueExpr>
 
-type VarRefOrType<T> = VarRef<T> | T
+type VarRefOrType<T> = VarRef<T> | T | PropertyAccessExpr<VarRef<any>, any, T>
 // type VarRefOrType<T> = VarRef<number> | number | PropertyAccessExpr<VarRef<any>, any, number>
 type asdf = VarRefOrType<string>
 
@@ -1191,10 +1193,13 @@ const operationsExample = CodeWriter(function* () {
     const user = yield* val.let("user", { name: "sai", age: 23423 })
 
     const haha = yield* val.let("haha", val.prop(user, "age"))
-    const sum = yield* val.let("sum", numeric.add(a, yield* val.prop(user, "age")))
+    const sum = yield* val.let("sum", numeric.add(a, val.prop(user, "age")))
+
+    const userName = yield* val.let("userName", val.prop(user, "name"))
+    const userAge = yield* val.let("userAge", val.prop(user, "age"))
 
     yield* val.if(
-      numeric.gt(a, b),
+      numeric.gt(a, userAge),
       val.block(function* () {
         yield* val.methodCall("console", "log", ["a is greater than b"])
       }),
