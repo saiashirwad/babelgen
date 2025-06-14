@@ -114,10 +114,6 @@ type LetInfer<Value extends ValueExpr> =
   Value extends number ? number
   : Value extends string ? string
   : Value extends boolean ? boolean
-  : Value extends Record<any, any> ?
-    {
-      -readonly [k in keyof Value]: LetInfer<Value[k]>
-    }
   : Value extends VarRef<infer Type> ? Type
   : Value extends ObjectExpr ? Record<string, any>
   : Value extends ArrayExpr ? any[]
@@ -128,11 +124,15 @@ type LetInfer<Value extends ValueExpr> =
   : Value extends InterfaceExpr ? any
   : Value extends RawExpr ? any
   : Value extends BlockExpr ? any
-  : Value extends BinaryOpExpr ? any
+  : Value extends NumericBinaryOpExpr ? number
   : Value extends UnaryOpExpr ? any
-  : Value extends PropertyAccessExpr ? any
+  : Value extends PropertyAccessExpr<infer _, infer __, infer T> ? T
   : Value extends TemplateLiteralExpr ? any
   : Value extends NumberExpr ? number
+  : Value extends Record<any, any> ?
+    {
+      -readonly [k in keyof Value]: LetInfer<Value[k]>
+    }
   : any
 
 class LetExpr<const Value extends ValueExpr> extends BaseExpr {
@@ -556,11 +556,11 @@ class RawExpr extends BaseExpr {
   }
 }
 
-class BinaryOpExpr extends BaseExpr {
+class NumericBinaryOpExpr extends BaseExpr {
   constructor(
-    public left: ValueExpr,
+    public left: VarRefOrType<number>,
     public operator: string,
-    public right: ValueExpr
+    public right: VarRefOrType<number>
   ) {
     super()
   }
@@ -570,6 +570,33 @@ class BinaryOpExpr extends BaseExpr {
     const rightStr =
       this.right instanceof BaseExpr ? this.right.toString() : JSON.stringify(this.right)
     return `${leftStr} ${this.operator} ${rightStr}`
+  }
+
+  *[Symbol.iterator]() {
+    yield this
+    return new VarRef<number>("result", type.primitive("number"))
+  }
+}
+
+class LogicalBinaryOpExpr extends BaseExpr {
+  constructor(
+    public left: VarRefOrType<boolean>,
+    public operator: string,
+    public right: VarRefOrType<boolean>
+  ) {
+    super()
+  }
+
+  toString(): string {
+    const leftStr = this.left instanceof BaseExpr ? this.left.toString() : JSON.stringify(this.left)
+    const rightStr =
+      this.right instanceof BaseExpr ? this.right.toString() : JSON.stringify(this.right)
+    return `${leftStr} ${this.operator} ${rightStr}`
+  }
+
+  *[Symbol.iterator]() {
+    yield this
+    return new VarRef<boolean>("result", type.primitive("boolean"))
   }
 }
 
@@ -589,10 +616,16 @@ class UnaryOpExpr extends BaseExpr {
   }
 }
 
-class PropertyAccessExpr extends BaseExpr {
+type VarRefInner<T> = T extends VarRef<infer U> ? U : never
+
+class PropertyAccessExpr<
+  const Value extends VarRef<any>,
+  const Property extends keyof VarRefInner<Value>,
+  const PropertyType extends VarRefInner<Value>[Property] = VarRefInner<Value>[Property]
+> extends BaseExpr {
   constructor(
-    public object: ValueExpr,
-    public property: ValueExpr | string,
+    public object: Value,
+    public property: Property,
     public computed: boolean = false
   ) {
     super()
@@ -611,6 +644,11 @@ class PropertyAccessExpr extends BaseExpr {
         this.property instanceof BaseExpr ? this.property.toString() : String(this.property)
       return `${objStr}.${propStr}`
     }
+  }
+
+  *[Symbol.iterator](): Generator<this, VarRef<string>, unknown> {
+    yield this
+    return new VarRef<string>("", type.primitive("any"))
   }
 }
 
@@ -657,14 +695,17 @@ type Expr =
   | InterfaceExpr
   | RawExpr
   | BlockExpr
-  | BinaryOpExpr
+  | NumericBinaryOpExpr
+  | LogicalBinaryOpExpr
   | UnaryOpExpr
-  | PropertyAccessExpr
+  | PropertyAccessExpr<any, never>
   | TemplateLiteralExpr
 
 type Primitive = number | string | boolean | symbol | Record<string, any>
 type ValueExpr = Expr | Primitive
 type FunctionBody = () => Generator<ValueExpr, ValueExpr>
+
+type VarRefOrType<T> = VarRef<T> | T
 
 function printValue(val: ValueExpr) {
   if (val instanceof BaseExpr) {
@@ -689,6 +730,43 @@ function CodeWriter<const Y>(write: () => Generator<Y, void>): CodeWriter {
       return result
     }
   }
+}
+
+type NumericBinaryOpParam = VarRefOrType<number> | number
+type LogicalBinaryOpParam = VarRefOrType<boolean> | boolean
+
+export const numeric = {
+  add: (left: VarRefOrType<number>, right: VarRefOrType<number>) =>
+    new NumericBinaryOpExpr(left, "+", right),
+  subtract: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "-", right),
+  multiply: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "*", right),
+  divide: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "/", right),
+  modulo: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "%", right),
+  power: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "**", right),
+
+  // Comparison operations
+  gt: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, ">", right),
+  lt: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "<", right),
+  gte: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, ">=", right),
+  lte: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "<=", right),
+  eq: (left: NumericBinaryOpParam, right: NumericBinaryOpParam) =>
+    new NumericBinaryOpExpr(left, "==", right)
+}
+
+export const logical = {
+  and: (left: LogicalBinaryOpParam, right: LogicalBinaryOpParam) =>
+    new LogicalBinaryOpExpr(left, "&&", right),
+  or: (left: LogicalBinaryOpParam, right: LogicalBinaryOpParam) =>
+    new LogicalBinaryOpExpr(left, "||", right)
 }
 
 const val = {
@@ -750,38 +828,20 @@ const val = {
 
   while: (condition: ValueExpr, body: () => Generator<ValueExpr>) => new WhileExpr(condition, body),
 
-  // Binary operations
-  add: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "+", right),
-  subtract: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "-", right),
-  multiply: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "*", right),
-  divide: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "/", right),
-  modulo: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "%", right),
-  power: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "**", right),
-
-  // Comparison operations
-  gt: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, ">", right),
-  lt: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "<", right),
-  gte: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, ">=", right),
-  lte: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "<=", right),
-  eq: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "==", right),
-  strictEq: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "===", right),
-  neq: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "!=", right),
-  strictNeq: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "!==", right),
-
-  // Logical operations
-  and: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "&&", right),
-  or: (left: ValueExpr, right: ValueExpr) => new BinaryOpExpr(left, "||", right),
-
-  // Unary operations
   not: (operand: ValueExpr) => new UnaryOpExpr("!", operand),
   negate: (operand: ValueExpr) => new UnaryOpExpr("-", operand),
   plus: (operand: ValueExpr) => new UnaryOpExpr("+", operand),
   increment: (operand: ValueExpr, prefix = true) => new UnaryOpExpr("++", operand, prefix),
   decrement: (operand: ValueExpr, prefix = true) => new UnaryOpExpr("--", operand, prefix),
 
-  // Property access
-  prop: (object: ValueExpr, property: string) => new PropertyAccessExpr(object, property, false),
-  index: (object: ValueExpr, index: ValueExpr) => new PropertyAccessExpr(object, index, true),
+  prop: <const Value extends VarRef<Record<any, any>>, Property extends keyof VarRefInner<Value>>(
+    object: Value,
+    property: Property
+  ) => new PropertyAccessExpr(object, property, false),
+  index: <const Value extends VarRef<Record<any, any>>, Property extends keyof VarRefInner<Value>>(
+    object: Value,
+    index: Property
+  ) => new PropertyAccessExpr(object, index, true),
 
   // Template literal
   template: (parts: string[], ...expressions: ValueExpr[]) =>
@@ -814,117 +874,115 @@ export const type = {
     new InterfaceExpr(name, properties, typeParams)
 }
 
-const cw = CodeWriter(function* () {
-  yield* val.block(function* () {
-    yield* type.typeAlias(
-      "Point",
-      type.object({
-        x: type.primitive("T"),
-        y: type.primitive("T")
-      }),
-      ["T"]
-    )
-    yield* val.nl()
+// const cw = CodeWriter(function* () {
+//   yield* val.block(function* () {
+//     yield* type.typeAlias(
+//       "Point",
+//       type.object({
+//         x: type.primitive("T"),
+//         y: type.primitive("T")
+//       }),
+//       ["T"]
+//     )
+//     yield* val.nl()
+//
+//     yield* type.interface(
+//       "Repository",
+//       {
+//         findById: type.function(
+//           [type.primitive("string")],
+//           type.generic("Promise", [type.generic("T")])
+//         ),
+//         save: type.function(
+//           [type.primitive("T")],
+//           type.generic("Promise", [type.primitive("void")])
+//         )
+//       },
+//       ["T"]
+//     )
+//
+//     yield* val.let(
+//       "point",
+//       val.object({
+//         x: val.number(10),
+//         y: val.number(20)
+//       }),
+//       type.generic("Point", [type.primitive("number")])
+//     )
+//
+//     yield* val.let(
+//       "lol",
+//       val.fn(
+//         [
+//           { name: "items", type: type.array(type.primitive("T")) },
+//           {
+//             name: "predicate",
+//             type: type.function([type.primitive("T")], type.primitive("boolean"))
+//           }
+//         ],
+//         function* () {
+//           return val.array([])
+//         },
+//         type.array(type.primitive("T")),
+//         ["T"]
+//       )
+//     )
+//
+//     yield* val.number(2)
+//   })
+// })
 
-    yield* type.interface(
-      "Repository",
-      {
-        findById: type.function(
-          [type.primitive("string")],
-          type.generic("Promise", [type.generic("T")])
-        ),
-        save: type.function(
-          [type.primitive("T")],
-          type.generic("Promise", [type.primitive("void")])
-        )
-      },
-      ["T"]
-    )
+// const cw2 = CodeWriter(function* () {
+//   yield* val.block(function* () {
+//     yield* val.let("x", true)
+//     yield* val.let("y", false)
+//     yield* val.let(
+//       "user",
+//       val.object({
+//         name: "sai",
+//         age: 2,
+//         isPerson: val.bool(true),
+//         isReal: true
+//       })
+//     )
+//     yield* val.let("items", val.array([1, "hello", val.string("world"), true]))
+//
+//     yield* val.let(
+//       "add",
+//       val.fn(
+//         [
+//           { name: "a", type: type.primitive("number") },
+//           { name: "b", type: type.primitive("number") }
+//         ],
+//         function* (vars) {
+//           return numeric.add(vars.a, vars.b)
+//         },
+//         type.primitive("number")
+//       )
+//     )
+//
+//     yield* val.let("result1", val.call("add", [5, 3]))
+//     let mathRef = val.let('mathRef', 2)
+//     yield* val.let("result2", val.call(val.prop(mathRef, "max"), [10, 20, 5]))
+//
+//     yield* val.methodCall("console", "log", ["Hello from method call!"])
+//     const itemsRef = new VarRef("items")
+//     yield* val.methodCall(itemsRef, "push", [42])
+//     yield* val.methodCall("user", "toString", [])
+//
+//     yield* val.if(
+//       true,
+//       val.block(function* () {
+//         yield* val.methodCall("console", "log", ["Hello World!"])
+//       }),
+//       val.block(function* () {
+//         yield* val.methodCall("console", "log", ["Goodbye!"])
+//       })
+//     )
+//   })
+// })
 
-    yield* val.let(
-      "point",
-      val.object({
-        x: val.number(10),
-        y: val.number(20)
-      }),
-      type.generic("Point", [type.primitive("number")])
-    )
-
-    yield* val.let(
-      "lol",
-      val.fn(
-        [
-          { name: "items", type: type.array(type.primitive("T")) },
-          {
-            name: "predicate",
-            type: type.function([type.primitive("T")], type.primitive("boolean"))
-          }
-        ],
-        function* () {
-          return val.array([])
-        },
-        type.array(type.primitive("T")),
-        ["T"]
-      )
-    )
-
-    yield* val.number(2)
-  })
-})
-
-const cw2 = CodeWriter(function* () {
-  yield* val.block(function* () {
-    yield* val.let("x", true)
-    yield* val.let("y", false)
-    yield* val.let(
-      "user",
-      val.object({
-        name: "sai",
-        age: 2,
-        isPerson: val.bool(true),
-        isReal: true
-      })
-    )
-    yield* val.let("items", val.array([1, "hello", val.string("world"), true]))
-
-    yield* val.let(
-      "add",
-      val.fn(
-        [
-          { name: "a", type: type.primitive("number") },
-          { name: "b", type: type.primitive("number") }
-        ],
-        function* (vars) {
-          return val.add(vars.a, vars.b)
-        },
-        type.primitive("number")
-      )
-    )
-
-    yield* val.let("result1", val.call("add", [5, 3]))
-    const mathRef = new VarRef("Math")
-    yield* val.let("result2", val.call(val.prop(mathRef, "max"), [10, 20, 5]))
-
-    yield* val.methodCall("console", "log", ["Hello from method call!"])
-    const itemsRef = new VarRef("items")
-    yield* val.methodCall(itemsRef, "push", [42])
-    yield* val.methodCall("user", "toString", [])
-
-    yield* val.if(
-      true,
-      val.block(function* () {
-        yield* val.methodCall("console", "log", ["Hello World!"])
-      }),
-      val.block(function* () {
-        yield* val.methodCall("console", "log", ["Goodbye!"])
-      })
-    )
-  })
-})
-
-console.log(cw.run())
-console.log("\n" + "=".repeat(50) + "\n")
-console.log(cw2.run())
+// console.log(cw2.run())
 
 const someFn = CodeWriter(function* () {
   yield* val.let(
@@ -937,7 +995,7 @@ const someFn = CodeWriter(function* () {
       val.fnBlock(function* (args) {
         let result = yield* val.let("result", val.array([]))
         yield* val.if(
-          val.gt(args.items, args.threshold),
+          numeric.gt(args.items, args.threshold),
           val.block(function* () {
             yield* val.methodCall("result", "push", [args.items])
           }),
@@ -955,121 +1013,118 @@ const someFn = CodeWriter(function* () {
 console.log("\n" + "=".repeat(50) + "\n")
 console.log(someFn.run())
 
-// Test loops
-const loopExamples = CodeWriter(function* () {
-  yield* val.block(function* () {
-    // For-of loop
-    yield* val.forOf("item", "items", function* (item) {
-      yield* val.methodCall("console", "log", [item])
-      yield* val.if(
-        val.gt(item, 5),
-        val.block(function* () {
-          yield* new RawExpr("continue")
-        }),
-        val.block(function* () {
-          // process item
-        })
-      )
-    })
+// const loopExamples = CodeWriter(function* () {
+//   yield* val.block(function* () {
+//     // For-of loop
+//     yield* val.forOf("item", "items", function* (item: VarRef<string>) {
+//       yield* val.methodCall("console", "log", [item])
+//       yield* val.if(
+//         numeric.gt(item, 5),
+//         val.block(function* () {
+//           yield* new RawExpr("continue")
+//         }),
+//         val.block(function* () {
+//           // process item
+//         })
+//       )
+//     })
+//
+//     yield* val.nl()
+//
+//     // For-in loop
+//     yield* val.forIn("key", "obj", function* (key) {
+//       const objRef = new VarRef("obj")
+//       yield* val.methodCall("console", "log", [val.add(val.add(key, ": "), val.index(objRef, key))])
+//     })
+//
+//     yield* val.nl()
+//
+//     // Traditional for loop
+//     const iRef = new VarRef("i")
+//     yield* val.for(new RawExpr("let i = 0"), "i < 10", val.increment(iRef, false), function* () {
+//       yield* val.methodCall("console", "log", [iRef])
+//       yield* val.if(
+//         val.strictEq(iRef, 5),
+//         val.block(function* () {
+//           yield* new RawExpr("break")
+//         }),
+//         val.block(function* () {
+//           // continue
+//         })
+//       )
+//     })
+//
+//     yield* val.nl()
+//
+//     let count = yield* val.let("count", 0)
+//     yield* val.while(val.lt(count, 3), function* () {
+//       yield* val.methodCall("console", "log", [val.template(["Count: ", ""], count)])
+//       val.increment(count, false)
+//     })
+//
+//     yield* val.nl()
+//
+//     // Nested loops
+//     yield* val.forOf("row", "matrix", function* () {
+//       yield* val.forOf("cell", "row", function* () {
+//         yield* val.methodCall("console", "log", ["cell"])
+//       })
+//     })
+//   })
+// })
 
-    yield* val.nl()
+// console.log(loopExamples.run())
 
-    // For-in loop
-    yield* val.forIn("key", "obj", function* (key) {
-      const objRef = new VarRef("obj")
-      yield* val.methodCall("console", "log", [val.add(val.add(key, ": "), val.index(objRef, key))])
-    })
-
-    yield* val.nl()
-
-    // Traditional for loop
-    const iRef = new VarRef("i")
-    yield* val.for(new RawExpr("let i = 0"), "i < 10", val.increment(iRef, false), function* () {
-      yield* val.methodCall("console", "log", [iRef])
-      yield* val.if(
-        val.strictEq(iRef, 5),
-        val.block(function* () {
-          yield* new RawExpr("break")
-        }),
-        val.block(function* () {
-          // continue
-        })
-      )
-    })
-
-    yield* val.nl()
-
-    let count = yield* val.let("count", 0)
-    yield* val.while(val.lt(count, 3), function* () {
-      yield* val.methodCall("console", "log", [val.template(["Count: ", ""], count)])
-      val.increment(count, false)
-    })
-
-    yield* val.nl()
-
-    // Nested loops
-    yield* val.forOf("row", "matrix", function* () {
-      yield* val.forOf("cell", "row", function* () {
-        yield* val.methodCall("console", "log", ["cell"])
-      })
-    })
-  })
-})
-
-console.log("\n" + "=".repeat(50) + "\n")
-console.log("LOOP EXAMPLES:")
-console.log(loopExamples.run())
-
-const typeSafeExample = CodeWriter(function* () {
-  yield* val.block(function* () {
-    const user = yield* val.let(
-      "user",
-      val.object({
-        name: "Alice",
-        age: 30
-      })
-    )
-
-    const items = yield* val.let("items", [1, 2, 3, 4, 5])
-
-    yield* val.methodCall(user, "toString", [])
-    yield* val.methodCall("console", "log", [user])
-
-    yield* val.forOf("item", items, function* (item) {
-      yield* val.methodCall("console", "log", [item])
-      yield* val.if(
-        val.gt(item, 3),
-        val.block(function* () {
-          yield* val.methodCall("console", "log", ["Item is greater than 3"])
-        }),
-        val.block(function* () {
-          yield* val.methodCall("console", "log", ["Item is 3 or less"])
-        })
-      )
-    })
-
-    const processUser = yield* val.let(
-      "processUser",
-      val.fn(
-        [
-          { name: "userParam", type: type.primitive("any") },
-          { name: "multiplier", type: type.primitive("number") }
-        ],
-        function* (args) {
-          yield* val.methodCall("console", "log", [args.userParam])
-          const result = yield* val.let(
-            "result",
-            val.multiply(val.prop(args.userParam, "age"), args.multiplier)
-          )
-          return result
-        },
-        type.primitive("number")
-      )
-    )
-
-    yield* val.call(processUser, [user, 2])
-  })
-})
+// const typeSafeExample = CodeWriter(function* () {
+//   yield* val.block(function* () {
+//     const user = yield* val.let(
+//       "user",
+//       val.object({
+//         name: "Alice",
+//         age: 30
+//       })
+//     )
+//
+//     const items = yield* val.let("items", [1, 2, 3, 4, 5])
+//
+//     yield* val.methodCall(user, "toString", [])
+//     yield* val.methodCall("console", "log", [user])
+//
+//     yield* val.forOf("item", items, function* (item) {
+//       yield* val.methodCall("console", "log", [item])
+//       yield* val.if(
+//         val.gt(item, 3),
+//         val.block(function* () {
+//           yield* val.methodCall("console", "log", ["Item is greater than 3"])
+//         }),
+//         val.block(function* () {
+//           yield* val.methodCall("console", "log", ["Item is 3 or less"])
+//         })
+//       )
+//     })
+//
+//     const processUser = yield* val.let(
+//       "processUser",
+//       val.fn(
+//         [
+//           { name: "userParam", type: type.primitive("any") },
+//           { name: "multiplier", type: type.primitive("number") }
+//         ],
+//         function* (args) {
+//           yield* val.methodCall("console", "log", [args.userParam])
+//           const result = yield* val.let(
+//             "result",
+//             val.multiply(val.prop(args.userParam, "age"), args.multiplier)
+//           )
+//           return result
+//         },
+//         type.primitive("number")
+//       )
+//     )
+//
+//     yield* val.call(processUser, [user, 2])
+//   })
+// })
 
 const operationsExample = CodeWriter(function* () {
   yield* val.block(function* () {
@@ -1077,10 +1132,10 @@ const operationsExample = CodeWriter(function* () {
     const b = yield* val.let("b", 5)
     const user = yield* val.let("user", { name: "Alice", age: 30 })
 
-    const sum = yield* val.let("sum", val.add(a, b))
+    const sum = yield* val.let("sum", numeric.add(a, 2))
 
     yield* val.if(
-      val.gt(a, b),
+      numeric.gt(a, b),
       val.block(function* () {
         yield* val.methodCall("console", "log", ["a is greater than b"])
       }),
@@ -1089,9 +1144,10 @@ const operationsExample = CodeWriter(function* () {
       })
     )
 
+    const adfas = val.prop(user, "age")
     const age = yield* val.let("age", val.prop(user, "age"))
 
-    const doubleAge = yield* val.let("doubleAge", val.multiply(val.prop(user, "age"), 2))
+    const doubleAge = yield* val.let("doubleAge", numeric.multiply(val.prop(user, "age"), 2))
 
     const greeting = yield* val.let(
       "greeting",
