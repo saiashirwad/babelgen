@@ -20,15 +20,15 @@ const TAB = "  "
 
 abstract class BaseExpr {
   abstract toString(): string
-
-  *[Symbol.iterator](): Generator<this, any> {
-    yield this
-  }
 }
 
 class BlockExpr extends BaseExpr {
   constructor(public block: () => Generator<ValueExpr>) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(indent = "") {
@@ -57,6 +57,10 @@ class VarRef<const Type> extends BaseExpr {
     public type?: BaseType
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(): string {
@@ -90,6 +94,10 @@ class StringExpr extends BaseExpr {
     super()
   }
 
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
+  }
+
   toString(): string {
     const typeAnnotation = this.type ? `: ${this.type.toString()}` : ""
     return JSON.stringify(this.value) + typeAnnotation
@@ -102,6 +110,10 @@ class BoolExpr extends BaseExpr {
     public type?: BaseType
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(): string {
@@ -151,7 +163,7 @@ class LetExpr<const Value extends ValueExpr> extends BaseExpr {
     return `let ${this.name}${typeAnnotation} = ${valueStr};`
   }
 
-  *[Symbol.iterator](): Generator<never, VarRef<LetInfer<Value>>, unknown> {
+  *[Symbol.iterator](): Generator<this, VarRef<LetInfer<Value>>, unknown> {
     // @ts-ignore
     yield this
     return new VarRef<LetInfer<Value>>(this.name, this.type)
@@ -165,6 +177,10 @@ class IfExpr extends BaseExpr {
     public elseBranch: BlockExpr
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(indent = ""): string {
@@ -189,6 +205,10 @@ class ForExpr extends BaseExpr {
     public type: "for-of" | "for-in" | "for" = "for-of"
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(indent = ""): string {
@@ -237,6 +257,10 @@ class WhileExpr extends BaseExpr {
     super()
   }
 
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
+  }
+
   toString(indent = ""): string {
     const conditionStr =
       this.condition instanceof BaseExpr ?
@@ -267,6 +291,10 @@ class ObjectExpr extends BaseExpr {
     super()
   }
 
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
+  }
+
   toString(): string {
     const properties = Object.entries(this.properties)
       .map(([key, value]) => {
@@ -285,6 +313,10 @@ class ArrayExpr extends BaseExpr {
     public type?: BaseType
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(): string {
@@ -308,6 +340,10 @@ class FunctionExpr extends BaseExpr {
     public typeParams?: string[]
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(): string {
@@ -371,6 +407,10 @@ class TypeAliasExpr extends BaseExpr {
     const typeParamsStr = this.typeParams?.length ? `<${this.typeParams.join(", ")}>` : ""
     return `type ${this.name}${typeParamsStr} = ${this.type.toString()};\n`
   }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
+  }
 }
 
 class InterfaceExpr extends BaseExpr {
@@ -380,6 +420,10 @@ class InterfaceExpr extends BaseExpr {
     public typeParams?: string[]
   ) {
     super()
+  }
+
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
   }
 
   toString(): string {
@@ -529,6 +573,10 @@ class MethodCallExpr extends BaseExpr {
     super()
   }
 
+  *[Symbol.iterator](): Generator<this, any> {
+    yield this
+  }
+
   toString(): string {
     const objStr =
       this.object instanceof BaseExpr ? this.object.toString()
@@ -621,7 +669,7 @@ type VarRefInner<T> = T extends VarRef<infer U> ? U : never
 class PropertyAccessExpr<
   const Value extends VarRef<any>,
   const Property extends keyof VarRefInner<Value>,
-  const PropertyType extends VarRefInner<Value>[Property] = VarRefInner<Value>[Property]
+  const PropertyType = VarRefInner<Value>[Property]
 > extends BaseExpr {
   constructor(
     public object: Value,
@@ -646,9 +694,13 @@ class PropertyAccessExpr<
     }
   }
 
-  *[Symbol.iterator](): Generator<this, VarRef<string>, unknown> {
-    yield this
-    return new VarRef<string>("", type.primitive("any"))
+  // *[Symbol.iterator](): Generator<this, any> {
+  //   yield this
+  // }
+
+  *[Symbol.iterator]() {
+    // yield this
+    return new VarRef<PropertyType>("hi", type.primitive("any"))
   }
 }
 
@@ -706,6 +758,8 @@ type ValueExpr = Expr | Primitive
 type FunctionBody = () => Generator<ValueExpr, ValueExpr>
 
 type VarRefOrType<T> = VarRef<T> | T
+// type VarRefOrType<T> = VarRef<number> | number | PropertyAccessExpr<VarRef<any>, any, number>
+type asdf = VarRefOrType<string>
 
 function printValue(val: ValueExpr) {
   if (val instanceof BaseExpr) {
@@ -732,8 +786,8 @@ function CodeWriter<const Y>(write: () => Generator<Y, void>): CodeWriter {
   }
 }
 
-type NumericBinaryOpParam = VarRefOrType<number> | number
-type LogicalBinaryOpParam = VarRefOrType<boolean> | boolean
+type NumericBinaryOpParam = VarRefOrType<number>
+type LogicalBinaryOpParam = VarRefOrType<boolean>
 
 export const numeric = {
   add: (left: VarRefOrType<number>, right: VarRefOrType<number>) =>
@@ -834,7 +888,11 @@ const val = {
   increment: (operand: ValueExpr, prefix = true) => new UnaryOpExpr("++", operand, prefix),
   decrement: (operand: ValueExpr, prefix = true) => new UnaryOpExpr("--", operand, prefix),
 
-  prop: <const Value extends VarRef<Record<any, any>>, Property extends keyof VarRefInner<Value>>(
+  prop: <
+    const Value extends VarRef<Record<any, any>>,
+    Property extends keyof VarRefInner<Value>,
+    const PropertyType = VarRefInner<Value>[Property]
+  >(
     object: Value,
     property: Property
   ) => new PropertyAccessExpr(object, property, false),
@@ -1010,8 +1068,8 @@ const someFn = CodeWriter(function* () {
   )
 })
 
-console.log("\n" + "=".repeat(50) + "\n")
 console.log(someFn.run())
+console.log("\n" + "=".repeat(50) + "\n")
 
 // const loopExamples = CodeWriter(function* () {
 //   yield* val.block(function* () {
@@ -1130,9 +1188,10 @@ const operationsExample = CodeWriter(function* () {
   yield* val.block(function* () {
     const a = yield* val.let("a", 10)
     const b = yield* val.let("b", 5)
-    const user = yield* val.let("user", { name: "Alice", age: 30 })
+    const user = yield* val.let("user", { name: "sai", age: 23423 })
 
-    const sum = yield* val.let("sum", numeric.add(a, 2))
+    const haha = yield* val.let("haha", val.prop(user, "age"))
+    const sum = yield* val.let("sum", numeric.add(a, yield* val.prop(user, "age")))
 
     yield* val.if(
       numeric.gt(a, b),
@@ -1143,20 +1202,20 @@ const operationsExample = CodeWriter(function* () {
         yield* val.methodCall("console", "log", ["a is not greater than b"])
       })
     )
-
-    const adfas = val.prop(user, "age")
-    const age = yield* val.let("age", val.prop(user, "age"))
-
-    const doubleAge = yield* val.let("doubleAge", numeric.multiply(val.prop(user, "age"), 2))
-
-    const greeting = yield* val.let(
-      "greeting",
-      val.template(["Hello ", "!"], val.prop(user, "name"))
-    )
-
-    yield* val.methodCall("console", "log", [greeting])
   })
 })
 
-console.log("hi")
+// const age = yield* val.let("age", val.prop(user, "something"))
+
+// const asdf = val.prop(user, "name")
+// const sdfsadf = numeric.multiply(asdf, 2)
+// const doubleAge = yield* val.let("doubleAge", numeric.multiply(asdf, 2))
+//
+// const greeting = yield* val.let(
+//   "greeting",
+//   val.template(["Hello ", "!"], val.prop(user, "name"))
+// )
+//
+// yield* val.methodCall("console", "log", [greeting])
+
 console.log(operationsExample.run())
