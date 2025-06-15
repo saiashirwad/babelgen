@@ -1,3 +1,6 @@
+import * as t from "@babel/types"
+import { generate } from "@babel/generator"
+
 export const isObject = (value: unknown) => typeof value === "object" && value !== null
 
 export const isPrimitive = (value: unknown) =>
@@ -18,13 +21,32 @@ export const isSymbol = (value: unknown) => typeof value === "symbol"
 
 const TAB = "  "
 
-abstract class BaseExpr {
+export abstract class BaseExpr {
   abstract toString(): string
+  abstract toBabelAST(): t.Node
 }
 
-class BlockExpr extends BaseExpr {
+export class BlockExpr extends BaseExpr {
   constructor(public block: () => Generator<ValueExpr>) {
     super()
+  }
+
+  toBabelAST(): t.BlockStatement {
+    const statements: t.Statement[] = []
+
+    for (const expr of this.block()) {
+      if (expr instanceof BaseExpr) {
+        const node = expr.toBabelAST()
+        // Convert expressions to expression statements if needed
+        if (t.isExpression(node)) {
+          statements.push(t.expressionStatement(node))
+        } else if (t.isStatement(node)) {
+          statements.push(node)
+        }
+      }
+    }
+
+    return t.blockStatement(statements)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -51,13 +73,17 @@ class BlockExpr extends BaseExpr {
   }
 }
 
-class VarRef<const Type> extends BaseExpr {
+export class VarRef<const Type> extends BaseExpr {
   declare readonly __type: Type
   constructor(
     public name: string,
     public type?: BaseType
   ) {
     super()
+  }
+
+  toBabelAST(): t.Identifier {
+    return t.identifier(this.name)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -69,7 +95,7 @@ class VarRef<const Type> extends BaseExpr {
   }
 }
 
-class NumberExpr extends BaseExpr {
+export class NumberExpr extends BaseExpr {
   constructor(
     public value: number,
     public type?: BaseType
@@ -82,17 +108,25 @@ class NumberExpr extends BaseExpr {
     return this.value.toString() + typeAnnotation
   }
 
+  toBabelAST(): t.NumericLiteral {
+    return t.numericLiteral(this.value)
+  }
+
   *[Symbol.iterator]() {
     return this
   }
 }
 
-class StringExpr extends BaseExpr {
+export class StringExpr extends BaseExpr {
   constructor(
     public value: string,
     public type?: BaseType
   ) {
     super()
+  }
+
+  toBabelAST(): t.StringLiteral {
+    return t.stringLiteral(this.value)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -105,12 +139,16 @@ class StringExpr extends BaseExpr {
   }
 }
 
-class BoolExpr extends BaseExpr {
+export class BoolExpr extends BaseExpr {
   constructor(
     public value: boolean,
     public type?: BaseType
   ) {
     super()
+  }
+
+  toBabelAST(): t.BooleanLiteral {
+    return t.booleanLiteral(this.value)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -148,7 +186,7 @@ type LetInfer<Value extends ValueExpr> =
     }
   : any
 
-class LetExpr<const Value extends ValueExpr> extends BaseExpr {
+export class LetExpr<const Value extends ValueExpr> extends BaseExpr {
   constructor(
     public name: string,
     public value: ValueExpr,
@@ -164,6 +202,38 @@ class LetExpr<const Value extends ValueExpr> extends BaseExpr {
     return `let ${this.name}${typeAnnotation} = ${valueStr};`
   }
 
+  toBabelAST(): t.VariableDeclaration {
+    return t.variableDeclaration("const", [
+      t.variableDeclarator(t.identifier(this.name), this.convertValueToBabel(this.value))
+    ])
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "number") {
+      return t.numericLiteral(value)
+    }
+    if (typeof value === "string") {
+      return t.stringLiteral(value)
+    }
+    if (typeof value === "boolean") {
+      return t.booleanLiteral(value)
+    }
+    if (typeof value === "object" && value !== null) {
+      return this.objectToBabel(value)
+    }
+    throw new Error(`Unsupported value type: ${typeof value}`)
+  }
+
+  private objectToBabel(obj: Record<string, any>): t.ObjectExpression {
+    const properties = Object.entries(obj).map(([key, val]) =>
+      t.objectProperty(t.identifier(key), this.convertValueToBabel(val))
+    )
+    return t.objectExpression(properties)
+  }
+
   *[Symbol.iterator](): Generator<this, VarRef<LetInfer<Value>>, unknown> {
     // @ts-ignore
     yield this
@@ -171,7 +241,7 @@ class LetExpr<const Value extends ValueExpr> extends BaseExpr {
   }
 }
 
-class IfExpr extends BaseExpr {
+export class IfExpr extends BaseExpr {
   constructor(
     public condition: ValueExpr,
     public thenBranch: BlockExpr,
@@ -182,6 +252,24 @@ class IfExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.IfStatement {
+    const test = this.convertValueToBabel(this.condition)
+    const consequent = this.thenBranch.toBabelAST() as t.BlockStatement
+    const alternate = this.elseBranch.toBabelAST() as t.BlockStatement
+
+    return t.ifStatement(test, consequent, alternate)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "string") return t.stringLiteral(value)
+    throw new Error(`Unsupported condition type: ${typeof value}`)
   }
 
   toString(indent = ""): string {
@@ -197,7 +285,7 @@ class IfExpr extends BaseExpr {
   }
 }
 
-class ForExpr extends BaseExpr {
+export class ForExpr extends BaseExpr {
   constructor(
     public init: ValueExpr | undefined,
     public variable: string,
@@ -210,6 +298,59 @@ class ForExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.ForStatement | t.ForOfStatement | t.ForInStatement {
+    if (this.type === "for-of") {
+      const left = t.variableDeclaration("const", [
+        t.variableDeclarator(t.identifier(this.variable))
+      ])
+      const right = this.convertValueToBabel(this.iterable)
+      const body = this.generateLoopBody()
+      return t.forOfStatement(left, right, body)
+    } else if (this.type === "for-in") {
+      const left = t.variableDeclaration("const", [
+        t.variableDeclarator(t.identifier(this.variable))
+      ])
+      const right = this.convertValueToBabel(this.iterable)
+      const body = this.generateLoopBody()
+      return t.forInStatement(left, right, body)
+    } else {
+      // Traditional for loop
+      const init = this.init ? this.convertValueToBabel(this.init) : null
+      const test = t.identifier(this.variable) // reusing variable for condition
+      const update = this.convertValueToBabel(this.iterable) as t.Expression
+      const body = this.generateLoopBody()
+      return t.forStatement(init, test, update, body)
+    }
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported value type: ${typeof value}`)
+  }
+
+  private generateLoopBody(): t.BlockStatement {
+    const statements: t.Statement[] = []
+    const loopVar = new VarRef(this.variable)
+
+    for (const expr of this.body(loopVar)) {
+      if (expr instanceof BaseExpr) {
+        const node = expr.toBabelAST()
+        if (t.isStatement(node)) {
+          statements.push(node)
+        } else if (t.isExpression(node)) {
+          statements.push(t.expressionStatement(node))
+        }
+      }
+    }
+
+    return t.blockStatement(statements)
   }
 
   toString(indent = ""): string {
@@ -250,12 +391,41 @@ class ForExpr extends BaseExpr {
   }
 }
 
-class WhileExpr extends BaseExpr {
+export class WhileExpr extends BaseExpr {
   constructor(
     public condition: ValueExpr,
     public body: () => Generator<ValueExpr>
   ) {
     super()
+  }
+
+  toBabelAST(): t.WhileStatement {
+    const test = this.convertValueToBabel(this.condition)
+    const statements: t.Statement[] = []
+
+    for (const expr of this.body()) {
+      if (expr instanceof BaseExpr) {
+        const node = expr.toBabelAST()
+        if (t.isStatement(node)) {
+          statements.push(node)
+        } else if (t.isExpression(node)) {
+          statements.push(t.expressionStatement(node))
+        }
+      }
+    }
+
+    const body = t.blockStatement(statements)
+    return t.whileStatement(test, body)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "string") return t.stringLiteral(value)
+    throw new Error(`Unsupported condition type: ${typeof value}`)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -284,7 +454,7 @@ class WhileExpr extends BaseExpr {
   }
 }
 
-class ObjectExpr extends BaseExpr {
+export class ObjectExpr extends BaseExpr {
   constructor(
     public properties: Record<string, ValueExpr>,
     public type?: BaseType
@@ -294,6 +464,24 @@ class ObjectExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.ObjectExpression {
+    const props = Object.entries(this.properties).map(([key, value]) => {
+      const valueNode = this.convertValueToBabel(value)
+      return t.objectProperty(t.identifier(key), valueNode)
+    })
+    return t.objectExpression(props)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported value type: ${typeof value}`)
   }
 
   toString(): string {
@@ -308,7 +496,7 @@ class ObjectExpr extends BaseExpr {
   }
 }
 
-class ArrayExpr extends BaseExpr {
+export class ArrayExpr extends BaseExpr {
   constructor(
     public elements: ValueExpr[],
     public type?: BaseType
@@ -318,6 +506,19 @@ class ArrayExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.ArrayExpression {
+    const elements = this.elements.map(element => {
+      if (element instanceof BaseExpr) {
+        return element.toBabelAST() as t.Expression
+      }
+      if (typeof element === "number") return t.numericLiteral(element)
+      if (typeof element === "string") return t.stringLiteral(element)
+      if (typeof element === "boolean") return t.booleanLiteral(element)
+      throw new Error(`Unsupported element type: ${typeof element}`)
+    })
+    return t.arrayExpression(elements)
   }
 
   toString(): string {
@@ -333,7 +534,7 @@ class ArrayExpr extends BaseExpr {
   }
 }
 
-class FunctionExpr extends BaseExpr {
+export class FunctionExpr extends BaseExpr {
   constructor(
     public params: Array<{ name: string; type?: BaseType }>,
     public body: (args: Record<string, VarRef<any>>) => Generator<ValueExpr, ValueExpr>,
@@ -345,6 +546,56 @@ class FunctionExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.ArrowFunctionExpression {
+    const params = this.params.map(param => t.identifier(param.name))
+
+    // Generate function body
+    const statements: t.Statement[] = []
+    const args = this.params.reduce(
+      (acc, param) => {
+        acc[param.name] = new VarRef(param.name, param.type)
+        return acc
+      },
+      {} as Record<string, VarRef<any>>
+    )
+
+    const generator = this.body(args)
+    let result = generator.next()
+
+    while (!result.done) {
+      const expr = result.value
+      if (expr instanceof BaseExpr) {
+        const node = expr.toBabelAST()
+        if (t.isStatement(node)) {
+          statements.push(node)
+        } else if (t.isExpression(node)) {
+          statements.push(t.expressionStatement(node))
+        }
+      }
+      result = generator.next()
+    }
+
+    // Handle return value
+    if (result.value !== undefined) {
+      const returnExpr = result.value
+      if (returnExpr instanceof BaseExpr) {
+        statements.push(t.returnStatement(returnExpr.toBabelAST() as t.Expression))
+      } else {
+        statements.push(t.returnStatement(this.convertValueToBabel(returnExpr)))
+      }
+    }
+
+    const body = t.blockStatement(statements)
+    return t.arrowFunctionExpression(params, body)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported value type: ${typeof value}`)
   }
 
   toString(): string {
@@ -395,13 +646,45 @@ class FunctionExpr extends BaseExpr {
   }
 }
 
-class TypeAliasExpr extends BaseExpr {
+export class TypeAliasExpr extends BaseExpr {
   constructor(
     public name: string,
     public type: BaseType,
     public typeParams?: string[]
   ) {
     super()
+  }
+
+  toBabelAST(): t.TSTypeAliasDeclaration {
+    // Note: This generates TypeScript-specific AST nodes
+    const typeAnnotation = this.convertTypeToTSType(this.type)
+    const typeParameters =
+      this.typeParams?.map(param => t.tsTypeParameter(null, null, param)) || null
+
+    return t.tsTypeAliasDeclaration(
+      t.identifier(this.name),
+      typeParameters ? t.tsTypeParameterDeclaration(typeParameters) : null,
+      typeAnnotation
+    )
+  }
+
+  private convertTypeToTSType(type: BaseType): t.TSType {
+    if (type instanceof PrimitiveType) {
+      switch (type.name) {
+        case "string":
+          return t.tsStringKeyword()
+        case "number":
+          return t.tsNumberKeyword()
+        case "boolean":
+          return t.tsBooleanKeyword()
+        case "any":
+          return t.tsAnyKeyword()
+        default:
+          return t.tsTypeReference(t.identifier(type.name))
+      }
+    }
+    // Add more type conversions as needed
+    return t.tsAnyKeyword()
   }
 
   toString(): string {
@@ -414,7 +697,7 @@ class TypeAliasExpr extends BaseExpr {
   }
 }
 
-class InterfaceExpr extends BaseExpr {
+export class InterfaceExpr extends BaseExpr {
   constructor(
     public name: string,
     public properties: Record<string, BaseType>,
@@ -425,6 +708,41 @@ class InterfaceExpr extends BaseExpr {
 
   *[Symbol.iterator](): Generator<this, any> {
     yield this
+  }
+
+  toBabelAST(): t.TSInterfaceDeclaration {
+    const properties = Object.entries(this.properties).map(([key, type]) => {
+      const typeAnnotation = this.convertTypeToTSType(type)
+      return t.tsPropertySignature(t.identifier(key), t.tsTypeAnnotation(typeAnnotation))
+    })
+
+    const typeParameters =
+      this.typeParams?.map(param => t.tsTypeParameter(null, null, param)) || null
+
+    return t.tsInterfaceDeclaration(
+      t.identifier(this.name),
+      typeParameters ? t.tsTypeParameterDeclaration(typeParameters) : null,
+      null,
+      t.tsInterfaceBody(properties)
+    )
+  }
+
+  private convertTypeToTSType(type: BaseType): t.TSType {
+    if (type instanceof PrimitiveType) {
+      switch (type.name) {
+        case "string":
+          return t.tsStringKeyword()
+        case "number":
+          return t.tsNumberKeyword()
+        case "boolean":
+          return t.tsBooleanKeyword()
+        case "any":
+          return t.tsAnyKeyword()
+        default:
+          return t.tsTypeReference(t.identifier(type.name))
+      }
+    }
+    return t.tsAnyKeyword()
   }
 
   toString(): string {
@@ -540,12 +858,29 @@ export class IntersectionType extends BaseType {
   }
 }
 
-class FunctionCallExpr extends BaseExpr {
+export class FunctionCallExpr extends BaseExpr {
   constructor(
     public functionRef: ValueExpr,
     public args: ValueExpr[]
   ) {
     super()
+  }
+
+  toBabelAST(): t.CallExpression {
+    const callee = this.convertValueToBabel(this.functionRef)
+    const args = this.args.map(arg => this.convertValueToBabel(arg))
+
+    return t.callExpression(callee, args)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported value type: ${typeof value}`)
   }
 
   toString(): string {
@@ -565,13 +900,32 @@ class FunctionCallExpr extends BaseExpr {
   }
 }
 
-class MethodCallExpr extends BaseExpr {
+export class MethodCallExpr extends BaseExpr {
   constructor(
     public object: ValueExpr,
     public method: string,
     public args: ValueExpr[]
   ) {
     super()
+  }
+
+  toBabelAST(): t.CallExpression {
+    const objectNode = this.convertValueToBabel(this.object)
+    const property = t.identifier(this.method)
+    const callee = t.memberExpression(objectNode, property)
+    const args = this.args.map(arg => this.convertValueToBabel(arg))
+
+    return t.callExpression(callee, args)
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported value type: ${typeof value}`)
   }
 
   *[Symbol.iterator](): Generator<this, any> {
@@ -595,9 +949,23 @@ class MethodCallExpr extends BaseExpr {
   }
 }
 
-class RawExpr extends BaseExpr {
+export class RawExpr extends BaseExpr {
   constructor(public code: string) {
     super()
+  }
+
+  toBabelAST(): t.Node {
+    // We should probably use @babel/parser
+    try {
+      const parsed = require("@babel/parser").parse(this.code, {
+        sourceType: "module",
+        plugins: ["typescript"]
+      })
+      return parsed.body[0] || t.expressionStatement(t.stringLiteral(this.code))
+    } catch {
+      // Fallback to string literal if parsing fails
+      return t.expressionStatement(t.stringLiteral(this.code))
+    }
   }
 
   toString(): string {
@@ -605,13 +973,30 @@ class RawExpr extends BaseExpr {
   }
 }
 
-class NumericBinaryOpExpr extends BaseExpr {
+export class NumericBinaryOpExpr extends BaseExpr {
   constructor(
     public left: VarRefOrType<number>,
     public operator: string,
     public right: VarRefOrType<number>
   ) {
     super()
+  }
+
+  toBabelAST(): t.BinaryExpression {
+    const leftNode = this.convertValueToBabel(this.left)
+    const rightNode = this.convertValueToBabel(this.right)
+
+    return t.binaryExpression(this.operator as t.BinaryExpression["operator"], leftNode, rightNode)
+  }
+
+  private convertValueToBabel(value: VarRefOrType<number>): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "number") {
+      return t.numericLiteral(value)
+    }
+    throw new Error(`Unsupported numeric operand: ${typeof value}`)
   }
 
   toString(): string {
@@ -627,13 +1012,28 @@ class NumericBinaryOpExpr extends BaseExpr {
   }
 }
 
-class LogicalBinaryOpExpr extends BaseExpr {
+export class LogicalBinaryOpExpr extends BaseExpr {
   constructor(
     public left: VarRefOrType<boolean>,
     public operator: string,
     public right: VarRefOrType<boolean>
   ) {
     super()
+  }
+
+  toBabelAST(): t.LogicalExpression {
+    const left = this.convertValueToBabel(this.left)
+    const right = this.convertValueToBabel(this.right)
+
+    return t.logicalExpression(this.operator as t.LogicalExpression["operator"], left, right)
+  }
+
+  private convertValueToBabel(value: VarRefOrType<boolean>): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported boolean operand: ${typeof value}`)
   }
 
   toString(): string {
@@ -649,13 +1049,35 @@ class LogicalBinaryOpExpr extends BaseExpr {
   }
 }
 
-class UnaryOpExpr extends BaseExpr {
+type UnaryOperators = "void" | "throw" | "delete" | "!" | "+" | "-" | "~" | "typeof"
+export class UnaryOpExpr extends BaseExpr {
   constructor(
     public operator: string,
     public operand: ValueExpr,
     public prefix: boolean = true
   ) {
     super()
+  }
+
+  toBabelAST(): t.UnaryExpression | t.UpdateExpression {
+    const argument = this.convertValueToBabel(this.operand)
+
+    if (this.operator === "++" || this.operator === "--") {
+      return t.updateExpression(this.operator, argument, this.prefix)
+    } else {
+      // @ts-expect-error this is cool
+      return t.unaryExpression(this.operator, argument, this.prefix)
+    }
+  }
+
+  private convertValueToBabel(value: ValueExpr): t.Expression {
+    if (value instanceof BaseExpr) {
+      return value.toBabelAST() as t.Expression
+    }
+    if (typeof value === "string") return t.stringLiteral(value)
+    if (typeof value === "number") return t.numericLiteral(value)
+    if (typeof value === "boolean") return t.booleanLiteral(value)
+    throw new Error(`Unsupported operand type: ${typeof value}`)
   }
 
   toString(): string {
@@ -667,7 +1089,7 @@ class UnaryOpExpr extends BaseExpr {
 
 type VarRefInner<T> = T extends VarRef<infer U> ? U : never
 
-class PropertyAccessExpr<
+export class PropertyAccessExpr<
   const Value extends VarRef<any>,
   const Property extends keyof VarRefInner<Value>,
   const PropertyType = VarRefInner<Value>[Property]
@@ -696,9 +1118,19 @@ class PropertyAccessExpr<
     }
   }
 
-  // *[Symbol.iterator](): Generator<this, any> {
-  //   yield this
-  // }
+  toBabelAST(): t.MemberExpression {
+    const objectNode = this.object.toBabelAST() as t.Expression
+
+    if (this.computed) {
+      const propertyNode =
+        typeof this.property === "string" ?
+          t.stringLiteral(this.property)
+        : t.identifier(String(this.property))
+      return t.memberExpression(objectNode, propertyNode, true)
+    } else {
+      return t.memberExpression(objectNode, t.identifier(String(this.property)), false)
+    }
+  }
 
   *[Symbol.iterator]() {
     // yield this
@@ -706,12 +1138,30 @@ class PropertyAccessExpr<
   }
 }
 
-class TemplateLiteralExpr extends BaseExpr {
+export class TemplateLiteralExpr extends BaseExpr {
   constructor(
     public parts: string[],
     public expressions: ValueExpr[]
   ) {
     super()
+  }
+
+  toBabelAST(): t.TemplateLiteral {
+    const quasis = this.parts.map((part, index) =>
+      t.templateElement({ raw: part, cooked: part }, index === this.parts.length - 1)
+    )
+
+    const expressions = this.expressions.map(expr => {
+      if (expr instanceof BaseExpr) {
+        return expr.toBabelAST() as t.Expression
+      }
+      if (typeof expr === "string") return t.stringLiteral(expr)
+      if (typeof expr === "number") return t.numericLiteral(expr)
+      if (typeof expr === "boolean") return t.booleanLiteral(expr)
+      throw new Error(`Unsupported template expression: ${typeof expr}`)
+    })
+
+    return t.templateLiteral(quasis, expressions)
   }
 
   toString(): string {
@@ -755,28 +1205,19 @@ type Expr =
   | PropertyAccessExpr<any, never>
   | TemplateLiteralExpr
 
-type Primitive = number | string | boolean | symbol | Record<string, any>
-type ValueExpr = Expr | Primitive
-type FunctionBody = () => Generator<ValueExpr, ValueExpr>
+export type Primitive = number | string | boolean | symbol | Record<string, any>
+export type ValueExpr = Expr | Primitive
+export type FunctionBody = () => Generator<ValueExpr, ValueExpr>
 
-type VarRefOrType<T> = VarRef<T> | T | PropertyAccessExpr<VarRef<any>, any, T>
+export type VarRefOrType<T> = VarRef<T> | T | PropertyAccessExpr<VarRef<any>, any, T>
 // type VarRefOrType<T> = VarRef<number> | number | PropertyAccessExpr<VarRef<any>, any, number>
-type asdf = VarRefOrType<string>
-
-function printValue(val: ValueExpr) {
-  if (val instanceof BaseExpr) {
-    return val.toString()
-  }
-  if (isObject(val)) {
-    console.log(val)
-  }
-}
+export type asdf = VarRefOrType<string>
 
 type CodeWriter = {
   run: () => string
 }
 
-function CodeGen<const Y>(write: () => Generator<Y, void>): CodeWriter {
+export function CodeGen<const Y>(write: () => Generator<Y, void>): CodeWriter {
   return {
     run: () => {
       let result = ""
@@ -788,8 +1229,29 @@ function CodeGen<const Y>(write: () => Generator<Y, void>): CodeWriter {
   }
 }
 
-type NumericBinaryOpParam = VarRefOrType<number>
-type LogicalBinaryOpParam = VarRefOrType<boolean>
+export function CodeGenAST<const Y>(write: () => Generator<Y, void>): { run: () => t.Program } {
+  return {
+    run: () => {
+      const body: t.Statement[] = []
+
+      for (const value of write()) {
+        if (value instanceof BaseExpr) {
+          const node = value.toBabelAST()
+          if (t.isStatement(node)) {
+            body.push(node)
+          } else if (t.isExpression(node)) {
+            body.push(t.expressionStatement(node))
+          }
+        }
+      }
+
+      return t.program(body, [], "module")
+    }
+  }
+}
+
+export type NumericBinaryOpParam = VarRefOrType<number>
+export type LogicalBinaryOpParam = VarRefOrType<boolean>
 
 export const numeric = {
   add: (left: VarRefOrType<number>, right: VarRefOrType<number>) =>
@@ -825,7 +1287,7 @@ export const logical = {
     new LogicalBinaryOpExpr(left, "||", right)
 }
 
-const $ = {
+export const $ = {
   number: (value: number, type?: BaseType) => new NumberExpr(value, type),
 
   string: (value: string, type?: BaseType) => new StringExpr(value, type),
@@ -1044,7 +1506,7 @@ export const type = {
 
 // console.log(cw2.run())
 
-const someFn = CodeGen(function* () {
+const someFn = CodeGenAST(function* () {
   yield* $.let(
     "complexFunction",
     $.fn(
@@ -1070,8 +1532,7 @@ const someFn = CodeGen(function* () {
   )
 })
 
-console.log(someFn.run())
-console.log("\n" + "=".repeat(50) + "\n")
+// console.log(generate(someFn.run()).map)
 
 // const loopExamples = CodeWriter(function* () {
 //   yield* val.block(function* () {
@@ -1186,7 +1647,7 @@ console.log("\n" + "=".repeat(50) + "\n")
 //   })
 // })
 
-const operationsExample = CodeGen(function* () {
+const operationsExample = CodeGenAST(function* () {
   yield* $.block(function* () {
     const a = yield* $.let("a", 10)
     const b = yield* $.let("b", numeric.add(5, a))
@@ -1196,32 +1657,16 @@ const operationsExample = CodeGen(function* () {
     const sum = yield* $.let("sum", numeric.add(a, $.prop(user, "age")))
 
     const result1 = yield* $.let("result1", numeric.add(a, $.prop(user, "age")))
-    const result2 = yield* $.let("result1", numeric.add(a, $.prop(user, "name")))
     const result3 = yield* $.let("result1", numeric.add(a, $.prop(user, "count")))
 
-    yield* $.if(
-      numeric.gt(a, $.prop(user, "name")),
-      $.block(function* () {
-        yield* $.methodCall("console", "log", ["a is greater than b"])
-      }),
-      $.block(function* () {
-        yield* $.methodCall("console", "log", ["a is not greater than b"])
-      })
-    )
+    // yield* $.if(
+    //   numeric.gt(a, $.prop(user, "name")),
+    //   $.block(function* () {
+    //     yield* $.methodCall("console", "log", ["a is greater than b"])
+    //   }),
+    //   $.block(function* () {
+    //     yield* $.methodCall("console", "log", ["a is not greater than b"])
+    //   })
+    // )
   })
 })
-
-// const age = yield* val.let("age", val.prop(user, "something"))
-
-// const asdf = val.prop(user, "name")
-// const sdfsadf = numeric.multiply(asdf, 2)
-// const doubleAge = yield* val.let("doubleAge", numeric.multiply(asdf, 2))
-//
-// const greeting = yield* val.let(
-//   "greeting",
-//   val.template(["Hello ", "!"], val.prop(user, "name"))
-// )
-//
-// yield* val.methodCall("console", "log", [greeting])
-
-console.log(operationsExample.run())
