@@ -776,7 +776,7 @@ type CodeWriter = {
   run: () => string
 }
 
-function CodeWriter<const Y>(write: () => Generator<Y, void>): CodeWriter {
+function CodeGen<const Y>(write: () => Generator<Y, void>): CodeWriter {
   return {
     run: () => {
       let result = ""
@@ -825,7 +825,7 @@ export const logical = {
     new LogicalBinaryOpExpr(left, "||", right)
 }
 
-const val = {
+const $ = {
   number: (value: number, type?: BaseType) => new NumberExpr(value, type),
 
   string: (value: string, type?: BaseType) => new StringExpr(value, type),
@@ -1044,22 +1044,22 @@ export const type = {
 
 // console.log(cw2.run())
 
-const someFn = CodeWriter(function* () {
-  yield* val.let(
+const someFn = CodeGen(function* () {
+  yield* $.let(
     "complexFunction",
-    val.fn(
+    $.fn(
       [
         { name: "items", type: type.array(type.primitive("number")) },
         { name: "threshold", type: type.primitive("number") }
       ],
-      val.fnBlock(function* (args) {
-        let result = yield* val.let("result", val.array([]))
-        yield* val.if(
+      $.fnBlock(function* (args) {
+        let result = yield* $.let("result", $.array([]))
+        yield* $.if(
           numeric.gt(args.items, args.threshold),
-          val.block(function* () {
-            yield* val.methodCall("result", "push", [args.items])
+          $.block(function* () {
+            yield* $.methodCall("result", "push", [args.items])
           }),
-          val.block(function* () {
+          $.block(function* () {
             // skip item
           })
         )
@@ -1186,25 +1186,26 @@ console.log("\n" + "=".repeat(50) + "\n")
 //   })
 // })
 
-const operationsExample = CodeWriter(function* () {
-  yield* val.block(function* () {
-    const a = yield* val.let("a", 10)
-    const b = yield* val.let("b", 5)
-    const user = yield* val.let("user", { name: "sai", age: 23423 })
+const operationsExample = CodeGen(function* () {
+  yield* $.block(function* () {
+    const a = yield* $.let("a", 10)
+    const b = yield* $.let("b", numeric.add(5, a))
+    const user = yield* $.let("user", { name: "sai", age: 23423, count: 2342 })
 
-    const haha = yield* val.let("haha", val.prop(user, "age"))
-    const sum = yield* val.let("sum", numeric.add(a, val.prop(user, "age")))
+    const haha = yield* $.let("haha", $.prop(user, "age"))
+    const sum = yield* $.let("sum", numeric.add(a, $.prop(user, "age")))
 
-    const userName = yield* val.let("userName", val.prop(user, "name"))
-    const userAge = yield* val.let("userAge", val.prop(user, "age"))
+    const result1 = yield* $.let("result1", numeric.add(a, $.prop(user, "age")))
+    const result2 = yield* $.let("result1", numeric.add(a, $.prop(user, "name")))
+    const result3 = yield* $.let("result1", numeric.add(a, $.prop(user, "count")))
 
-    yield* val.if(
-      numeric.gt(a, userAge),
-      val.block(function* () {
-        yield* val.methodCall("console", "log", ["a is greater than b"])
+    yield* $.if(
+      numeric.gt(a, $.prop(user, "name")),
+      $.block(function* () {
+        yield* $.methodCall("console", "log", ["a is greater than b"])
       }),
-      val.block(function* () {
-        yield* val.methodCall("console", "log", ["a is not greater than b"])
+      $.block(function* () {
+        yield* $.methodCall("console", "log", ["a is not greater than b"])
       })
     )
   })
