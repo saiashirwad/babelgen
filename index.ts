@@ -1657,6 +1657,7 @@ const operationsExample = CodeGenAST(function* () {
     const sum = yield* $.let("sum", numeric.add(a, $.prop(user, "age")))
 
     const result1 = yield* $.let("result1", numeric.add(a, $.prop(user, "age")))
+    // const result2 = yield* $.let("result1", numeric.add(a, $.prop(user, "name")))
     const result3 = yield* $.let("result1", numeric.add(a, $.prop(user, "count")))
 
     // yield* $.if(
@@ -1669,4 +1670,6 @@ const operationsExample = CodeGenAST(function* () {
     //   })
     // )
   })
-})
+}).run()
+
+// console.log(JSON.stringify(operationsExample, null, 2))
